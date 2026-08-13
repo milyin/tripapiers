@@ -96,12 +96,13 @@ valeur     := le reste
 Exemples valides, tels que demandés :
 
 ```
-confiance:haute
+confiance:85
 titre:facture-electricite-mars
 date:prin:2024-03-17
 date:aux:2024-02-28
 nom:prin:DUPONT_Marie
-nom:aux:DUPONT_Paul
+nom:prin:MARTIN_Paul
+nom:aux:BERNARD_Luc
 cat:sante:ordonnance
 cat:logement:diagnostic:dpe
 ```
@@ -126,10 +127,14 @@ schema_version: 1
 namespaces:
   - name: confiance
     prompt: >-
-      Ton niveau de confiance global dans l'étiquetage de ce document.
-      Émets exactement une ligne.
+      La qualité du texte que tu viens de lire : peut-on se fier à cette OCR ?
+      Réponds par un pourcentage entier de 0 à 100, arrondi à un multiple de 5.
+      100 = texte propre et intégralement lisible ; 50 = lisible mais avec des
+      mots manifestement altérés ; 0 = illisible ou vide. Juge le TEXTE, pas ta
+      capacité à l'étiqueter. Émets exactement une ligne. Exemple : confiance:85
     cardinality: { min: 1, max: 1 }
-    values: [haute, moyenne, basse]        # vocabulaire fermé et ordonné
+    value_type: percent                    # entier 0..100, comparable
+    value_pattern: '^(100|[0-9]{1,2})$'
 
   - name: titre
     prompt: >-
@@ -149,9 +154,12 @@ namespaces:
 
   - name: nom
     prompt: >-
-      Chaque personne physique concernée, au format NOM_Prenom. La personne dont
-      le document traite en premier lieu porte le rôle prin, les autres aux.
-      Exemple : nom:prin:DUPONT_Marie
+      Chaque personne physique concernée, au format NOM_Prenom. Le rôle prin
+      désigne une partie au document — celle qu'il engage ou dont il traite ;
+      le rôle aux désigne une personne seulement mentionnée. Un document peut
+      avoir PLUSIEURS personnes principales : un contrat de bail engage le
+      bailleur et le locataire, tous deux en prin. Émets-les toutes.
+      Exemples : nom:prin:DUPONT_Marie / nom:prin:MARTIN_Paul / nom:aux:BERNARD_Luc
     roles: [prin, aux]
     cardinality: { min: 1, max: 8 }
     catalogue: persons.yml                 # optionnel — cf. §11 point 3
@@ -165,7 +173,37 @@ namespaces:
     hierarchical: true
 ```
 
-### 3.3 Continuité avec `category.yml`
+### 3.3 `confiance:` — le verdict sur l'OCR
+
+`confiance:` n'est pas un tag comme les autres : c'est **la réponse à la question « peut-on se
+fier aux résultats de l'OCR ? »**, exprimée en pourcentage entier. C'est la seule des deux
+missions confiées au modèle qui ne concerne pas l'étiquetage — c'est l'évaluation de l'OCR
+elle-même, et c'est elle qui pilote l'escalade (§6).
+
+Le prompt insiste sur un point qui, sans cela, se confond facilement : le modèle doit juger
+**le texte**, pas sa propre aisance à l'étiqueter. Un document parfaitement océrisé mais
+inhabituel doit donner `confiance:100` même si le modèle hésite sur la catégorie — c'est
+l'affaire des règles de cardinalité, pas de ce tag.
+
+> **Un pourcentage produit par un modèle n'est pas calibré.** `confiance:85` ne signifie pas
+> que 85 % des caractères sont corrects : c'est un jugement ordinal habillé en nombre. Trois
+> conséquences pratiques :
+> - le traiter comme un **score monotone à seuil**, jamais comme une probabilité ;
+> - demander un **arrondi au multiple de 5** — la fausse précision n'apporte rien et la
+>   granularité grossière améliore la reproductibilité d'une exécution à l'autre ;
+> - **calibrer le seuil sur le corpus réel**, pas *a priori* : `quarantaine list` groupé par
+>   décile de `confiance:` montre où le poser (cf. §12, phase 4).
+>
+> Le pourcentage reste préférable à une échelle `haute|moyenne|basse` : il se compare
+> directement, il tolère un ajustement fin du seuil sans retoucher le vocabulaire, et il se
+> croise avec les métriques locales, qui sont elles aussi numériques (§7).
+
+Si un jour une confiance portant sur **l'étiquetage** s'avère utile, elle devra être un espace
+de noms distinct — `certitude:` par exemple — et non un rôle de celui-ci : mélanger « le texte
+est-il lisible » et « suis-je sûr de mes tags » dans une seule valeur rend les deux
+inexploitables.
+
+### 3.4 Continuité avec `category.yml`
 
 `category.yml` a déjà exactement cette forme — une entrée y est un `name: cat:<valeur>` assorti
 d'une `description` qui est une consigne d'attribution (« Attribuer aux relevés, moyens de
@@ -255,13 +293,16 @@ mis en cache une seule fois.
 Prompt système = préambule figé + catalogue rendu depuis `.CONFIG` + consignes de format :
 
 ```
-Tu reçois le texte d'un document. Émets la liste des tags que ce texte porte.
+Tu reçois le texte d'un document, issu d'une OCR. Tu as deux tâches :
+juger la qualité de cette OCR, et émettre la liste des tags que ce texte porte.
 
 FORMAT DE SORTIE — impératif :
 - une ligne = un tag, rien d'autre
 - aucune prose, aucune puce, aucune numérotation, aucun bloc de code
 - n'émets un tag que si le texte le justifie ; n'invente aucune valeur
-- si tu hésites sur une valeur, ne l'émets pas et baisse confiance:
+- si tu hésites sur une valeur, ne l'émets pas — l'omission est traitée en aval
+- confiance: juge la lisibilité du TEXTE, pas ta certitude sur les autres tags :
+  un texte propre vaut confiance:100 même si tu hésites sur la catégorie
 
 TAGS DISPONIBLES :
 <rendu déterministe de tags.yml, catalogues inclus>
@@ -377,12 +418,13 @@ schema_version: 1
 required:
   - { namespace: titre,               min: 1, max: 1 }
   - { namespace: date, role: prin,    min: 1, max: 1 }
-  - { namespace: nom,  role: prin,    min: 1, max: 1 }
+  - { namespace: nom,  role: prin,    min: 1 }          # PAS de max : cf. encadré
   - { namespace: cat,                 min: 1 }
 
-confidence:
+confidence:                     # le verdict sur l'OCR (§3.3)
   namespace: confiance
-  minimum: moyenne              # ordre pris dans tags.yml : haute > moyenne > basse
+  minimum: 70                   # pourcentage entier ; à calibrer sur le corpus
+  divergence_locale: 40         # écart max toléré avec la métrique locale (§7)
 
 unknown_values:                 # valeur hors catalogue
   cat: reject                   # reject | propose | accept
@@ -391,10 +433,44 @@ unknown_values:                 # valeur hors catalogue
 parse_quality:
   max_rejected_ratio: 0.5       # au-delà, réponse jugée non exploitable
 
-on_failure:
-  first_attempt:  escalate      # -> appel vision, puis retour en 2
-  second_attempt: quarantine
+on_failure:                     # que faire selon CE QUI a échoué
+  low_confidence:    escalate   # le texte est suspect : ré-océriser peut aider
+  parse_quality:     escalate
+  missing_required:  escalate   # cf. encadré ci-dessous
+  unknown_value:     quarantine # ré-océriser ne créera pas la catégorie manquante
+  second_attempt:    quarantine # toujours terminal
 ```
+
+> **Plusieurs `nom:prin:` sont autorisés, et c'est le cas normal pour tout document qui lie
+> des parties.** Un contrat de bail engage le bailleur et le locataire : les deux sont
+> principaux, aucun n'est « auxiliaire ». Idem pour un acte de vente, une convention, un
+> jugement, une attestation de caution. Contraindre `nom:prin:` à une seule valeur
+> obligerait le modèle à élire arbitrairement une partie et à rétrograder l'autre en `aux:` —
+> le document deviendrait alors invisible depuis la seconde personne dans `STRUCTURE`, ce qui
+> est exactement l'inverse du service rendu.
+>
+> `aux:` garde un sens précis, et différent : une personne **mentionnée** sans être partie —
+> le médecin qui signe l'ordonnance, l'agent immobilier nommé dans le bail, l'enfant cité dans
+> une attestation qui ne le concerne pas directement. La distinction est donc « partie » vs
+> « mentionné », pas « le plus important » vs « les autres ».
+>
+> Il n'y a donc **pas de `max` sur `nom:prin:`** ; le total reste borné par
+> `cardinality.max: 8` de `tags.yml`. Deux conséquences, traitées §8.3 et §8.4 : la dérivation
+> du nom de fichier doit choisir, et la vue `STRUCTURE` fait apparaître le document sous
+> **chaque** personne principale — c'est précisément ce qu'on veut d'un bail.
+
+> **Pourquoi l'issue dépend de la règle en défaut.** Escalader, c'est refaire l'OCR. Ça n'a de
+> sens que si le problème vient du **texte**. Un `confiance:45` dit exactement cela : le texte
+> est douteux, une transcription vision a de bonnes chances de faire mieux. À l'inverse, un
+> `confiance:95` accompagné d'un `date:prin:` manquant dit que le texte est propre et que le
+> document ne porte tout simplement pas de date — ré-océriser un texte déjà parfait ne la fera
+> pas apparaître, et coûtera le prix fort d'un appel vision pour rien.
+>
+> Un seul `on_failure` global forcerait à choisir entre gaspiller des appels vision et
+> quarantainer des documents qu'une meilleure OCR aurait sauvés. La valeur par défaut proposée
+> ci-dessus reste `escalate` pour `missing_required` — prudente, parce qu'un champ absent est
+> parfois le symptôme d'une zone illisible que `confiance:` a sous-estimée — mais c'est
+> précisément le réglage à revoir en premier si la facture des appels vision dérape.
 
 Verdict :
 
@@ -440,6 +516,32 @@ Outils vérifiés présents sur la machine de développement : `pdftotext` 26.01
 Les binaires externes sont invoqués avec des arguments figés, timeout, et un enregistrement de
 leur version dans le ledger : une mise à jour de tesseract change les résultats, c'est une
 donnée de reproductibilité.
+
+### 7.1 Deux mesures de la même chose
+
+La qualité de l'OCR est jugée deux fois, et c'est voulu :
+
+| | **métrique locale** (§7, étape 4) | **`confiance:`** (§3.3) |
+|---|---|---|
+| Qui | tesseract + heuristiques | le modèle |
+| Quand | avant tout appel LLM | pendant l'appel `tag` |
+| Coût | nul | inclus dans l'appel |
+| Nature | mécanique : confiance par mot, taux de mots reconnus | sémantique : le texte a-t-il du sens ? |
+| Rôle | **portail** — faut-il seulement appeler `tag` ? | **verdict** — peut-on se fier au résultat ? |
+
+Elles ne mesurent pas la même chose et échouent différemment. Tesseract peut rendre une haute
+confiance par mot sur un texte parfaitement reconnu mais dont l'ordre de lecture est absurde
+(colonnes entrelacées, tableau aplati) : la métrique locale est aveugle, le modèle voit le
+problème. Inversement, une police inhabituelle fait chuter la confiance tesseract sur un texte
+que le modèle lit sans peine.
+
+D'où le réglage `divergence_locale` (§6) : un écart important entre les deux — typiquement une
+métrique locale bonne et un `confiance:` bas — est signalé comme anomalie et journalisé. Ce
+n'est pas un échec en soi, c'est le signal qui dit que l'un des deux seuils est mal calibré, ou
+que le corpus contient une classe de documents que le portail laisse passer à tort.
+
+Les deux valeurs sont conservées dans le bloc `ocr` du sidecar (§8.3), ce qui rend la
+calibration possible *a posteriori* sur le corpus réel, sans reclasser quoi que ce soit.
 
 ---
 
@@ -522,9 +624,11 @@ ocr:
   provenance: local | vision        # d'où vient la transcription
   engine: "tesseract 5.5.0 / fra+eng"   # ou l'id de modèle pour vision
   escalated: false
+  qualite_locale: 78                # métrique déterministe, 0..100 (§7.1)
+  qualite_modele: 85                # le tag confiance:, recopié ici pour l'analyse
 tags:
   - cat:sante:ordonnance
-  - confiance:haute
+  - confiance:85
   - date:prin:2024-03-17
   - nom:prin:DUPONT_Marie
   - titre:ordonnance-dr-martin
@@ -550,6 +654,23 @@ rend la vérification indépendante possible. La lecture passe par un parseur YA
 `build_sidecar(tags, ocr, document_bytes) -> Result<Sidecar>` valide, calcule le SHA-256 sur les
 octets réels, dérive `DATE/YYYY/MM/DD` depuis `date:prin:`, et sérialise. La fonction miroir
 `verify_sidecar` appartient au composant optionnel ([`verification.md`](verification.md) §3).
+
+**Nom de fichier et personnes principales multiples.** Le gabarit `NOM_Prenom_Titre.ext` suppose
+une seule personne ; un bail en a deux. Trois issues étaient possibles — concaténer les noms
+(chemins longs, plafond de 255 octets vite atteint), omettre le nom quand il y en a plusieurs
+(gabarit incohérent), ou en choisir un. Règle retenue : **le nom de fichier reprend la personne
+principale première dans l'ordre lexicographique**, les autres n'apparaissent que dans les tags.
+
+C'est cohérent avec la séparation qui structure tout le dépôt : `DATE` est le stockage
+*physique*, où chaque document existe une fois et à un seul endroit ; `STRUCTURE` est la vue
+*logique*, où il apparaît autant de fois que nécessaire (§8.4). Chercher un bail par le nom du
+locataire se fait dans `STRUCTURE`, pas en lisant l'arborescence `DATE` — dont le nom de fichier
+n'a qu'à être déterministe, lisible et borné. La liste complète des parties reste dans les tags
+du sidecar, qui font autorité.
+
+Collisions : deux baux du même jour dont la première partie porte le même nom produisent le même
+gabarit. Le suffixe déterministe déjà prévu (§12, phase 1) les sépare — il est dérivé du `sha256`
+du contenu, donc stable d'une exécution à l'autre.
 
 ### 8.4 DSL de `structure.yml` face aux tags hiérarchiques
 
@@ -585,9 +706,22 @@ Les tags hiérarchiques ajoutent deux règles, qui n'existaient pas et qu'il fau
   par sous-chaîne — `cat:sante:` ne doit pas capturer un hypothétique `cat:santeanimale`.
 
 Avec les rôles, `nom:` doit aussi préciser s'il éventaille sur toutes les personnes ou sur les
-seules `nom:prin:`. *Proposition : `nom` éventaille sur `prin` uniquement ; `nom:aux:` reste
-disponible comme filtre explicite* — sinon chaque document apparaît sous toutes les personnes
-qu'il mentionne.
+seules `nom:prin:`. *Proposition : `nom` éventaille sur **toutes** les valeurs `nom:prin:`, et
+sur elles seules ; `nom:aux:` reste disponible comme filtre explicite* — sinon chaque document
+apparaît sous quiconque y est simplement mentionné, et le dossier du médecin se remplit des
+ordonnances de tous ses patients.
+
+L'éventail porte donc sur un ensemble, pas sur une valeur unique : **un document à plusieurs
+personnes principales reçoit un lien symbolique sous chacune d'elles.** Un bail apparaît dans le
+dossier du bailleur et dans celui du locataire, avec la même cible physique dans `DATE` — un seul
+fichier, deux chemins d'accès. C'est exactement le service que rend la vue logique, et la raison
+pour laquelle `nom:prin:` n'a pas de plafond (§6).
+
+Conséquence à ne pas manquer côté reconstruction : le plan attendu associe *plusieurs* chemins
+logiques à un même document, et une reconstruction incrémentale doit les ajouter ou les retirer
+**ensemble**. Retirer une seule branche parce qu'une partie a disparu des tags, en laissant
+l'autre, produit une vue à demi juste — le cas est explicitement au programme de la recette de
+la phase 5.
 
 `structure.yml` n'est **jamais** écrit par le programme.
 
@@ -659,7 +793,7 @@ indépendante ; la correspondance invariant → contrôle est en
 
 ## 11. Points à trancher
 
-1. **Migration du catalogue vers des catégories hiérarchiques** (§3.3). Le catalogue actuel
+1. **Migration du catalogue vers des catégories hiérarchiques** (§3.4). Le catalogue actuel
    encode déjà une hiérarchie en prose (« catégorie générale » / « sous-type médical pour… »).
    La rendre structurelle — `cat:medecine:ordonnance` — améliore l'étiquetage et la vue
    `STRUCTURE`, mais change les tags de tous les sidecars existants.
@@ -669,12 +803,19 @@ indépendante ; la correspondance invariant → contrôle est en
 3. **Catalogue des personnes.** Un `.CONFIG/persons.yml` autoritaire rend `nom:` vérifiable et
    évite les variantes orthographiques (`DUPONT_Marie` / `Dupont_Marie`). Sans lui, l'espace
    `nom:` reste ouvert et `unknown_values: propose` est le seul garde-fou. Recommandé.
-4. **Encodage de la confiance.** `confiance:haute|moyenne|basse` est proposé — robuste et
-   directement évaluable. Une confiance *par espace de noms* (`confiance:cat:haute`) serait plus
-   fine et permettrait d'escalader sur la seule catégorie douteuse ; elle complique le prompt et
-   les règles. À arbitrer.
-5. **Langues d'OCR** : `fra+eng` par défaut ; `rus` est installé — à activer ou non.
-6. **Types d'entrée** : PDF et images au départ. Formats bureautiques (`.docx`, `.odt`) hors
+4. **Calibration des seuils de `confiance:`.** L'encodage est fixé — un pourcentage entier
+   décrivant la qualité de l'OCR (§3.3) — mais `confidence.minimum` (proposé à 70) et
+   `divergence_locale` (proposé à 40) sont des valeurs *a priori*. Elles ne peuvent être
+   réglées que sur le corpus réel, à la fin de la phase 4 : classer un lot avec un seuil
+   volontairement bas, puis lire la distribution de `confiance:` croisée avec les échecs
+   d'évaluation. Un seuil trop haut envoie en vision des documents parfaitement lisibles ; trop
+   bas, il laisse passer des tags dérivés d'un texte corrompu — le second défaut est le plus
+   coûteux, car il produit un classement faux et silencieux.
+5. **Issue par défaut de `missing_required`** (§6). `escalate` est prudent mais paie un appel
+   vision pour des documents dont le texte était déjà bon. À revoir après la première
+   calibration, avec les chiffres sous les yeux.
+6. **Langues d'OCR** : `fra+eng` par défaut ; `rus` est installé — à activer ou non.
+7. **Types d'entrée** : PDF et images au départ. Formats bureautiques (`.docx`, `.odt`) hors
    périmètre initial — à confirmer.
 
 ---
@@ -690,8 +831,9 @@ phase 1.
 - Workspace Cargo, `clap`, `tracing`, `anyhow`/`thiserror`, CI (`fmt`, `clippy -D warnings`, `test`).
 - `crates/config` : chargement et validation de `tags.yml`, `category.yml`, `evaluation.yml`,
   `structure.yml`. Contrôles croisés : tout `catalogue:` référencé existe, tout espace de noms
-  cité par `evaluation.yml` est déclaré dans `tags.yml`, les niveaux de `confidence.minimum`
-  appartiennent aux `values` déclarées.
+  cité par `evaluation.yml` est déclaré dans `tags.yml`, l'espace visé par `confidence` déclare
+  bien `value_type: percent`, et `confidence.minimum` comme `divergence_locale` tiennent dans
+  0..100.
 - **Rendu déterministe du prompt** depuis le catalogue, avec son empreinte.
 - Parseur du DSL `structure.yml` + `StructurePlan`.
 - **Recette :** tests dorés sur les fichiers de configuration réels et sur le prompt rendu
@@ -703,11 +845,15 @@ phase 1.
 - `parse_tags` (§5.2) avec motifs de rejet typés.
 - Moteur d'évaluation (§6) et `Verdict`.
 - `build_sidecar` (§8.3), émetteur YAML canonique, SHA-256.
+- Dérivation du nom de fichier (§8.3), y compris le choix de la personne principale première
+  dans l'ordre lexicographique et le suffixe déterministe en cas de collision.
 - **Recette :** tests de propriété (round-trip tags ⇄ sidecar, stabilité octet-à-octet,
   idempotence) ; **corpus de réponses LLM pathologiques** — prose d'introduction, puces,
   numérotation, blocs de code, balises internes, tags tronqués en fin de flux, espaces de noms
   inconnus, doublons, casse inattendue, ligne de 10 ko — chacune doit être ignorée sans panique
-  et comptée au bon motif ; table de décision complète du moteur d'évaluation.
+  et comptée au bon motif ; table de décision complète du moteur d'évaluation, dont le cas
+  **plusieurs `nom:prin:`** (accepté, contrairement à plusieurs `date:prin:`) et le nom de
+  fichier stable quel que soit l'ordre d'émission des personnes par le modèle.
 
 ### Phase 2 — Stockage local, transactions et quarantaine
 - `crates/store` : inventaire `INBOX` borné, écriture atomique, `rename`, `.TRASH` + `restore`,
@@ -752,7 +898,9 @@ phase 1.
   `.CONFIG`, état local incompatible, `--force`, anomalie d'intégrité.
 - **Recette :** propriété centrale — une `STRUCTURE` reconstruite à neuf est **identique** à
   celle obtenue par une suite d'incréments ; aucun fichier physique dans `STRUCTURE` ; aucun
-  lien pendant ; cas hiérarchiques (`cat:a:b:c`, filtre par préfixe, rôles `nom:`).
+  lien pendant ; cas hiérarchiques (`cat:a:b:c`, filtre par préfixe, rôles `nom:`) ; **document à
+  plusieurs `nom:prin:`** — un lien sous chaque partie, tous vers la même cible, ajoutés et
+  retirés ensemble lors d'un incrément qui fait disparaître l'une des parties des tags.
 
 ### Phase 6 — Rapport, réétiquetage, propositions
 - `report` : rapport final unique distinguant classés / mis en quarantaine avec la règle en

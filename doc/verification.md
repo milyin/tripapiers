@@ -84,12 +84,14 @@ Relit les deux fichiers depuis le disque et recontrôle, indépendamment :
 | Rôles | tout tag d'un espace à rôles porte un rôle déclaré (`prin`/`aux`), et les cardinalités par rôle sont respectées |
 | Valeurs | chaque valeur passe le `value_pattern` de son espace, ou appartient à son `catalogue:` quand il en déclare un |
 | Tags `date:` | `date:prin:` unique et analysable ; toute valeur `date:` au format `AAAA-MM-JJ` et représentant une date réelle |
-| Tags `nom:` | forme `NOM_Prenom` ; `nom:prin:` unique ; présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
+| Tags `nom:` | forme `NOM_Prenom` ; **au moins un** `nom:prin:` — plusieurs sont légitimes (bail, acte de vente) ; présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
+| Nom de fichier | le nom du document reprend bien la personne principale première dans l'ordre lexicographique, et le titre issu de `titre:` |
 | Tags `cat:` | chaque chemin de catégorie existe dans `category.yml`, segment par segment ; cardinalité respectée |
 | Règles d'évaluation | les tags du sidecar satisfont encore `.CONFIG/evaluation.yml` — un document classé sous d'anciennes règles et devenu non conforme est signalé |
 | Ordre canonique | la liste `tags:` est triée lexicographiquement et sans doublon |
 | Chemin dérivé | `destination.primary_path` == `DATE/YYYY/MM/DD` dérivé de `date:prin:`, et == chemin réel du fichier sur le disque |
-| Bloc `ocr` | `provenance` ∈ {`local`, `vision`}, `engine` non vide, `escalated` cohérent avec `provenance` |
+| Tag `confiance:` | présent, unique, entier dans 0..100 ; ≥ `confidence.minimum` de `.CONFIG/evaluation.yml` |
+| Bloc `ocr` | `provenance` ∈ {`local`, `vision`}, `engine` non vide, `escalated` cohérent avec `provenance`, `qualite_modele` égal au tag `confiance:`, `qualite_locale` dans 0..100 |
 | Conformité du sidecar | `schema_version` connue, clés attendues présentes, aucune clé inconnue, sérialisation canonique (ordre des clés, LF, absence d'ancres) |
 | Adjacence | le sidecar est bien `<nom-du-document>.yml` dans le même dossier |
 
@@ -276,7 +278,7 @@ phase 1 du pipeline (cœur déterministe, contrat YAML) est figée ; V3 dépend 
    `verify_sidecar` doit détecter la divergence. Ce test est la justification d'existence du
    composant ; il est marqué et documenté comme tel.
 6. **Dérive du vocabulaire** — durcir `evaluation.yml` après coup (par exemple exiger
-   `confiance: haute`) et relancer `verify date` : les documents classés sous les anciennes
+   `confidence.minimum: 90`) et relancer `verify date` : les documents classés sous les anciennes
    règles doivent être signalés, sans être modifiés. C'est le signal qui dit qu'un `retag`
    s'impose.
 7. **Profil minimal** — `cargo build -p tripapiers-cli --no-default-features` compile, et
