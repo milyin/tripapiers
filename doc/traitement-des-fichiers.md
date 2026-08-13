@@ -201,11 +201,6 @@ l'affaire des règles de cardinalité, pas de ce tag.
 > directement, il tolère un ajustement fin du seuil sans retoucher le vocabulaire, et il se
 > croise avec les métriques locales, qui sont elles aussi numériques (§7).
 
-Si un jour une confiance portant sur **l'étiquetage** s'avère utile, elle devra être un espace
-de noms distinct — `certitude:` par exemple — et non un rôle de celui-ci : mélanger « le texte
-est-il lisible » et « suis-je sûr de mes tags » dans une seule valeur rend les deux
-inexploitables.
-
 ### 3.4 Continuité avec `category.yml`
 
 `category.yml` a déjà exactement cette forme — une entrée y est un `name: cat:<valeur>` assorti
@@ -304,7 +299,7 @@ FORMAT DE SORTIE — impératif :
 - aucune prose, aucune puce, aucune numérotation, aucun bloc de code
 - n'émets un tag que si le texte le justifie ; n'invente aucune valeur
 - si tu hésites sur une valeur, ne l'émets pas — l'omission est traitée en aval
-- confiance: juge la lisibilité du TEXTE, pas ta certitude sur les autres tags :
+- confiance: juge la lisibilité du TEXTE, pas ta capacité à l'étiqueter :
   un texte propre vaut confiance:100 même si tu hésites sur la catégorie
 
 TAGS DISPONIBLES :
