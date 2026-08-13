@@ -12,7 +12,7 @@
 Le composant peut être retiré du workspace, ou simplement jamais installé. Dans ce cas :
 
 **Ce qui reste garanti** — le pipeline conserve son **contrôle en ligne** après écriture
-(cf. [`traitement-des-fichiers.md`](traitement-des-fichiers.md) §2.5) : à la fin de chaque
+(cf. [`traitement-des-fichiers.md`](traitement-des-fichiers.md) §2.6) : à la fin de chaque
 transaction, il relit depuis le disque le document et le sidecar qu'il vient d'écrire,
 recalcule le sidecar et compare octet à octet, puis recontrôle le checksum du document
 déplacé. Ce contrôle fait partie de la transaction, échoue fermé et déclenche le rollback.
@@ -52,14 +52,15 @@ La règle qui gouverne toute la conception de ce composant :
 - Entrées interdites : `inbox_batch.json`, `structure_state.json`, `executions.db`,
   `llm_cache/` — l'audit ne doit pas pouvoir être trompé par un état local corrompu.
 - Dépendances Cargo autorisées : `core` et `config` en **lecture seule** (types et parseurs).
-  Interdit : `pipeline`, `store`, `llm`, `extract`.
+  Interdit : `pipeline`, `store`, `llm`, `extract`, `eval` — les règles d'évaluation sont
+  elles aussi réimplémentées, sinon un bug du moteur d'évaluation passerait inaperçu.
 - Les contrôles sont **réimplémentés** à partir du contrat, pas obtenus en appelant
   `build_sidecar`. Une divergence entre les deux implémentations est précisément le signal
   recherché.
 
 En conséquence, `pipeline` ne dépend pas de `verify`, et retirer `crates/verify` du workspace
 doit laisser `cargo build -p tripapiers-cli` intact
-([`traitement-des-fichiers.md`](traitement-des-fichiers.md) §4.1).
+([`traitement-des-fichiers.md`](traitement-des-fichiers.md) §8.1).
 
 ---
 
@@ -79,10 +80,16 @@ Relit les deux fichiers depuis le disque et recontrôle, indépendamment :
 |---|---|
 | Identifiant stable de source | `source.sha256` correspond bien au SHA-256 des octets du document |
 | Checksum | `checksum: "sha256:…"` recalculé sur les octets réels, pas sur une copie en mémoire |
-| Date | `dates.primary.value` analysable, cohérente avec `dates.principal` |
-| Chemin dérivé | `destination.primary_path` == `DATE/YYYY/MM/DD` dérivé de la date primaire, et == chemin réel du fichier sur le disque |
-| Tags `nom:` | forme `nom:NOM_Prenom`, et présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
-| Tags `cat:` | chaque catégorie existe dans `category.yml` ; règles `assign_only_listed_categories` et `allow_multiple_categories` respectées |
+| Grammaire des tags | chaque entrée de `tags:` respecte la grammaire (au moins deux segments, bornes dures) et son espace de noms est déclaré dans `.CONFIG/tags.yml` |
+| Rôles | tout tag d'un espace à rôles porte un rôle déclaré (`prin`/`aux`), et les cardinalités par rôle sont respectées |
+| Valeurs | chaque valeur passe le `value_pattern` de son espace, ou appartient à son `catalogue:` quand il en déclare un |
+| Tags `date:` | `date:prin:` unique et analysable ; toute valeur `date:` au format `AAAA-MM-JJ` et représentant une date réelle |
+| Tags `nom:` | forme `NOM_Prenom` ; `nom:prin:` unique ; présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
+| Tags `cat:` | chaque chemin de catégorie existe dans `category.yml`, segment par segment ; cardinalité respectée |
+| Règles d'évaluation | les tags du sidecar satisfont encore `.CONFIG/evaluation.yml` — un document classé sous d'anciennes règles et devenu non conforme est signalé |
+| Ordre canonique | la liste `tags:` est triée lexicographiquement et sans doublon |
+| Chemin dérivé | `destination.primary_path` == `DATE/YYYY/MM/DD` dérivé de `date:prin:`, et == chemin réel du fichier sur le disque |
+| Bloc `ocr` | `provenance` ∈ {`local`, `vision`}, `engine` non vide, `escalated` cohérent avec `provenance` |
 | Conformité du sidecar | `schema_version` connue, clés attendues présentes, aucune clé inconnue, sérialisation canonique (ordre des clés, LF, absence d'ancres) |
 | Adjacence | le sidecar est bien `<nom-du-document>.yml` dans le même dossier |
 
@@ -115,10 +122,30 @@ Parcours borné de `DATE/YYYY/MM/DD`, sans suivre les liens symboliques :
   divergence — branche manquante, branche en trop, cible erronée — est signalée.
 - **Aucun dossier `CATEGORY`** à la racine (invariant 6).
 
-### 4.3 Modes de sortie
+### 4.3 Audit `QUARANTAINE`
+
+La quarantaine est une zone de stockage comme une autre : elle a ses propres invariants, et un
+document qui s'y perd silencieusement est une perte de données.
+
+- **Complétude du dossier de preuve** : chaque entrée porte un `rapport.yml` lisible, la
+  transcription locale, et la transcription vision si `rapport.yml` indique qu'une escalade a eu
+  lieu. Les sorties brutes du modèle sont présentes pour chaque passe déclarée.
+- **Intégrité du document** : le SHA-256 du fichier mis en quarantaine correspond à celui
+  enregistré dans `rapport.yml`. Une entrée de quarantaine n'est pas un brouillon : le document
+  doit y être intact et récupérable.
+- **Séparation stricte d'avec `DATE`** : aucune entrée ne contient de sidecar conforme au
+  contrat canonique. `rapport.yml` porte un `schema_version` distinct, et le contrôle vérifie
+  qu'aucun fichier de la quarantaine ne passerait `verify_sidecar` — sans quoi un outil tiers
+  pourrait prendre une entrée en échec pour un document classé.
+- **Absence de doublon fantôme** : aucun `source.sha256` présent à la fois dans `QUARANTAINE` et
+  dans `DATE`. Ce cas signale un `requeue` mal terminé.
+- **Ancienneté** : les entrées plus vieilles qu'un seuil configurable sont signalées — non comme
+  une erreur, mais comme un rappel. Une quarantaine qu'on ne vide jamais est une corbeille.
+
+### 4.4 Modes de sortie
 
 ```
-tripapiers verify [date|structure|all] [--format text|json] [--fail-fast]
+tripapiers verify [date|structure|quarantaine|all] [--format text|json] [--fail-fast]
 ```
 
 Code de sortie 0 si tout passe, non-0 sinon. `--format json` produit un rapport machine,
@@ -140,7 +167,10 @@ Contrôles :
 4. intégrité de `DATE` (§4.1) ;
 5. unicité des sidecars des documents récemment ajoutés ;
 6. conformité de `STRUCTURE` (§4.2), ou proposition d'un plan de reconstruction sûr ;
-7. cohérence du registre de lot avec le contenu réel de `INBOX` et `DATE`.
+7. cohérence du registre de lot avec le contenu réel de `INBOX`, `DATE` et `QUARANTAINE` ;
+8. aucune escalade laissée en cours : un document dont le ledger porte un appel `vision` sans
+   passe `tag` consécutive est un travail interrompu, pas un échec d'évaluation — il doit
+   repartir en `pending`, pas en quarantaine.
 
 Si l'une de ces conditions échoue, `doctor` sort non-0 avec un incident explicite et
 **recommande** de laisser les tâches mutatives en pause. Il ne modifie rien lui-même.
@@ -149,7 +179,7 @@ Si l'une de ces conditions échoue, `doctor` sort non-0 avec un incident explici
 
 ## 6. Correspondance invariant → contrôle
 
-Reprise des invariants de [`traitement-des-fichiers.md`](traitement-des-fichiers.md) §4.7.
+Reprise des invariants de [`traitement-des-fichiers.md`](traitement-des-fichiers.md) §10.
 
 | # | Invariant | Contrôlé par | Contrôlable *a posteriori* ? |
 |---|---|---|---|
@@ -166,10 +196,14 @@ Reprise des invariants de [`traitement-des-fichiers.md`](traitement-des-fichiers
 | 11 | `STRUCTURE` reproductible depuis `DATE` + `.CONFIG` | §4.2, contrôle fort | oui |
 | 12 | inventaires bornés, sans suivre les symlinks | — | non — propriété d'exécution |
 | 13 | verdicts LLM rejouables | hors périmètre (état local) | non |
+| 14 | escalade bornée, ≤ 3 appels LLM | `doctor` §5.8 + compteur du ledger | partiellement |
+| 15 | lignes non conformes ignorées, jamais réparées | §3 (grammaire, valeurs) — une valeur « réparée » se voit comme une valeur hors catalogue | indirectement |
+| 16 | échec d'évaluation ⇒ `QUARANTAINE` avec preuve | §4.3 | oui |
+| 17 | prompt engendré depuis `.CONFIG` | empreinte du prompt rendu, recalculée depuis `.CONFIG` et comparée à celle des rapports | oui |
 
 Les quatre invariants marqués « propriété d'exécution » ne sont pas auditables après coup :
 ils sont garantis par la conception du pipeline et couverts par ses propres tests
-([`traitement-des-fichiers.md`](traitement-des-fichiers.md) §7).
+([`traitement-des-fichiers.md`](traitement-des-fichiers.md) §14).
 
 ---
 
@@ -204,11 +238,16 @@ phase 1 du pipeline (cœur déterministe, contrat YAML) est figée ; V3 dépend 
   `category.yml`, clé inconnue, ordre des clés altéré, sidecar renommé). Test croisé : tout
   sidecar produit par `build_sidecar` en phase 1 doit passer `verify_sidecar`.
 
-### Phase V2 — Audit `DATE`
+### Phase V2 — Audit `DATE` et `QUARANTAINE`
 - Parcours borné, unicité, détection de doublons par `source.sha256`, cohérence de
   l'arborescence de dates.
+- Audit `QUARANTAINE` (§4.3) : complétude du dossier de preuve, intégrité du document, séparation
+  stricte d'avec `DATE`, doublons fantômes, ancienneté.
 - **Recette :** corpus synthétique de 500 documents avec injections — sidecar orphelin,
-  document sans sidecar, doublon exact, `2024/02/30`. Chaque injection doit être détectée et
+  document sans sidecar, doublon exact, `2024/02/30`. Pour la quarantaine : `rapport.yml`
+  manquant ou illisible, transcription vision absente alors que `rapport.yml` déclare une
+  escalade, document altéré après mise en quarantaine, sidecar canonique glissé dans une entrée,
+  document présent à la fois en `DATE` et en `QUARANTAINE`. Chaque injection doit être détectée et
   attribuée au bon chemin.
 
 ### Phase V3 — Intégrité `STRUCTURE` et `doctor`
@@ -233,9 +272,13 @@ phase 1 du pipeline (cœur déterministe, contrat YAML) est figée ; V3 dépend 
 4. **Lecture seule** — `verify all` sur un dépôt monté en lecture seule doit fonctionner et ne
    rien écrire (contrôlé par comparaison d'empreintes avant/après).
 5. **Indépendance réelle** — muter volontairement `build_sidecar` (par exemple inverser deux
-   clés) : les tests du pipeline peuvent rester verts, mais `verify_sidecar` doit détecter la
-   divergence. Ce test est la justification d'existence du composant ; il est marqué et
-   documenté comme tel.
-6. **Profil minimal** — `cargo build -p tripapiers-cli --no-default-features` compile, et
+   clés, ou ne plus trier la liste `tags:`) : les tests du pipeline peuvent rester verts, mais
+   `verify_sidecar` doit détecter la divergence. Ce test est la justification d'existence du
+   composant ; il est marqué et documenté comme tel.
+6. **Dérive du vocabulaire** — durcir `evaluation.yml` après coup (par exemple exiger
+   `confiance: haute`) et relancer `verify date` : les documents classés sous les anciennes
+   règles doivent être signalés, sans être modifiés. C'est le signal qui dit qu'un `retag`
+   s'impose.
+7. **Profil minimal** — `cargo build -p tripapiers-cli --no-default-features` compile, et
    `tripapiers verify` renvoie alors une erreur explicite « composant non installé », pas un
    panic ni un succès silencieux.

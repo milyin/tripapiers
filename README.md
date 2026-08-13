@@ -11,10 +11,12 @@ Trois principes :
 - **Prédictible.** Les artefacts canoniques — YAML, checksums, chemins dérivés — sont produits
   par du code déterministe, jamais par un modèle de langage. Un document par transaction,
   verrou exclusif, opérations réversibles, programme de vérification indépendant.
-- **LLM au strict minimum.** Un modèle n'intervient que pour évaluer le résultat de l'OCR
-  locale et pour décoder un document quand l'OCR locale a échoué. Ses réponses sont contraintes
-  par un schéma JSON, revalidées localement, et mémorisées par empreinte de contenu pour que
-  les exécutions suivantes soient reproductibles.
+- **LLM au strict minimum.** Un modèle n'intervient que pour deux tâches : **étiqueter** un
+  texte — il rend une liste de tags, un par ligne, et le code Rust ignore toute ligne non
+  conforme — et **ré-océriser** un document quand l'OCR locale n'a pas suffi. Les tags reçus
+  passent ensuite une évaluation formelle et configurable ; un document qui échoue part en
+  `QUARANTAINE` avec son dossier de preuve, jamais dans l'archive. Les réponses sont mémorisées
+  par empreinte de contenu, pour que les exécutions suivantes soient reproductibles.
 
 ## État
 
