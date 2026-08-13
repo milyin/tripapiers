@@ -1,8 +1,8 @@
-# tripapiers — plan de développement
+# tripapiers — traitement des fichiers
 
-> Application Rust autonome et locale de tri documentaire, dérivée de la documentation
-> de `hermes-documents` (pipeline `INBOX → DATE → STRUCTURE` actuellement orchestré par
-> Hermes Agent sur Google Drive).
+> **Composant obligatoire.** Ce document décrit le pipeline de classement lui-même :
+> `INBOX → DATE → STRUCTURE`. L'audit indépendant du corpus fait l'objet d'un document et
+> d'un composant séparés, **optionnels** : voir [`verification.md`](verification.md).
 
 ---
 
@@ -23,13 +23,11 @@ l'ensemble du classement.
 | Rôle du LLM | analyse complète, lecture native → OCR → vision | **uniquement** : évaluation de l'OCR locale, et décodage vision quand l'OCR locale a échoué |
 | Suppression | corbeille Drive | `.TRASH/` local réversible |
 | Exclusion mutuelle | verrou interprocessus maison + ledger | `flock` sur un fichier de verrou unique |
+| Vérification | intégrée au pipeline | **composant séparé et optionnel** |
 
 **Hors périmètre :** toute prise en charge de Google Drive (API, OAuth, raccourcis Drive,
 tâches cron distantes). Le pipeline devient un outil en ligne de commande invoqué
 manuellement ou par un timer local (systemd/cron de l'utilisateur).
-
-**Invariants conservés depuis `architecture.md` §10** — ils constituent le cahier des
-charges de la partie déterministe et sont repris en §4.7.
 
 ---
 
@@ -55,9 +53,17 @@ par l'architecture, pas par le modèle :
 4. **Un seul document par transaction**, verrou exclusif, journal de rollback : l'état du
    dépôt après interruption est toujours l'un de deux états connus (avant / après), jamais
    un état intermédiaire.
-5. **Programme de vérification indépendant** (`tripapiers verify`) qui relit les fichiers
-   depuis le disque et recontrôle checksum, chemin dérivé, tags et conformité du sidecar —
-   l'équivalent de `verify_drive_document_yaml.py`.
+5. **Contrôle en ligne après écriture, non désactivable.** À la fin de chaque transaction, le
+   pipeline relit depuis le disque le document et son sidecar fraîchement écrits et recontrôle
+   checksum, chemin dérivé et conformité du sidecar. Ce contrôle fait partie de la transaction :
+   il échoue fermé et déclenche le rollback. Il est **indépendant du composant optionnel** de
+   vérification, qui apporte autre chose — un audit exhaustif du corpus, réimplémenté
+   séparément (cf. [`verification.md`](verification.md) §2).
+
+Autrement dit : sans le composant optionnel, chaque document écrit reste individuellement
+vérifié au moment de son écriture. Ce que l'on perd, c'est l'audit *a posteriori* de tout le
+corpus par un programme indépendant — et donc la détection des corruptions survenues **après**
+le classement (édition manuelle, bit rot, lien symbolique cassé, sidecar dupliqué).
 
 > **Point à valider** — l'énoncé « le LLM ne sert qu'à l'évaluation de l'OCR et au décodage
 > en cas d'échec » laisse une question ouverte : *qui attribue les catégories et extrait les
@@ -85,8 +91,8 @@ Racine du dépôt documentaire, configurable (`--root`, `TRIPAPIERS_ROOT`) :
 │       └── NOM_Prenom_Titre.yml
 ├── STRUCTURE/                  # vue logique : dossiers + liens symboliques uniquement
 ├── .CONFIG/
-│   ├── category.yml            # repris tel quel de hermes-documents
-│   └── structure.yml           # repris tel quel de hermes-documents
+│   ├── category.yml            # catalogue des catégories autorisées
+│   └── structure.yml           # plan déclaratif de la vue logique
 └── .TRASH/                     # suppressions réversibles, horodatées
 ```
 
@@ -127,7 +133,8 @@ tripapiers/
 │   ├── llm/         # client Claude (HTTP), schéma JSON, cache, rejeu, comptabilité coût
 │   ├── store/       # opérations fichiers atomiques, journal, rollback, trash
 │   ├── pipeline/    # transactions, registre de lot, verrou, ledger, rapport
-│   └── cli/         # binaire `tripapiers`
+│   ├── cli/         # binaire `tripapiers`
+│   └── verify/      # OPTIONNEL — voir verification.md
 ├── doc/
 └── tests/fixtures/  # corpus de test (PDF propres, scans bruités, images)
 ```
@@ -135,9 +142,11 @@ tripapiers/
 `core` et `config` ne dépendent d'aucun I/O réseau et d'aucun processus externe : ce sont
 les crates testables de façon exhaustive et le siège des invariants.
 
-### 4.2 Contrat YAML du sidecar
+**Le crate `verify` est en dehors de la chaîne de dépendances du pipeline.** `pipeline` ne
+dépend pas de `verify` ; `verify` dépend de `core` et `config` en lecture seule. Retirer
+`verify` du workspace doit laisser `cargo build -p tripapiers-cli` intact.
 
-Repris de `architecture.md` §5 :
+### 4.2 Contrat YAML du sidecar
 
 ```yaml
 schema_version: 1
@@ -162,16 +171,19 @@ checksum: "sha256:<empreinte>"
 **Sérialisation canonique écrite à la main**, pas par un sérialiseur générique : ordre des
 clés fixe, guillemets explicites, LF uniquement, pas d'ancres ni d'alias, indentation
 constante, pas de repli de lignes. Objectif : l'octet-à-octet du sidecar est fonction pure de
-l'analyse validée. La lecture (config et sidecars) passe par un parseur YAML classique.
-`serde_yaml` étant abandonné en amont, prévoir `serde_norway` ou `serde_yaml_ng` pour la
-lecture seule.
+l'analyse validée — c'est ce qui rend la vérification indépendante possible. La lecture (config
+et sidecars) passe par un parseur YAML classique. `serde_yaml` étant abandonné en amont,
+prévoir `serde_norway` ou `serde_yaml_ng` pour la lecture seule.
 
-Deux fonctions publiques miroir des scripts Python d'origine :
+Fonction publique du pipeline :
+
 - `build_sidecar(analysis, document_bytes) -> Result<Sidecar>` : valide l'analyse, calcule le
   SHA-256 sur les octets réels, dérive `DATE/YYYY/MM/DD`, sérialise de façon stable.
-- `verify_sidecar(document_path, sidecar_path, config) -> Report` : relit les deux fichiers
-  depuis le disque et recontrôle indépendamment identifiant de source, checksum, date,
-  chemin dérivé, tags `nom:`/`cat:` et conformité complète.
+
+La fonction miroir `verify_sidecar` appartient au composant optionnel
+([`verification.md`](verification.md) §3). Le pipeline, lui, effectue son contrôle en ligne
+(§2.5) en relisant les octets écrits et en recalculant `build_sidecar` : c'est une comparaison
+octet à octet, pas une réimplémentation.
 
 ### 4.3 DSL de `structure.yml`
 
@@ -288,7 +300,7 @@ Points de mise en œuvre :
 - **Erreurs.** Chaîne d'erreurs par statut : 429 avec `retry-after`, 5xx/529 avec backoff
   exponentiel borné, 400/404 non réessayables. Toute erreur non résolue ⇒ le document reste
   `pending` (jamais `blocked` : `blocked` est réservé aux tentatives réelles ayant abouti à une
-  raison vérifiée, cf. `architecture.md` §7).
+  raison vérifiée).
 - **Mode lot.** Pour le traitement en masse non interactif, l'API Batches
   (`POST /v1/messages/batches`, ≤ 24 h, **‑50 % sur les tokens**) ; les résultats reviennent
   dans un ordre arbitraire, indexés par `custom_id` (= `sha256` du document). Mode
@@ -297,6 +309,12 @@ Points de mise en œuvre :
   gros corpus ; ne jamais estimer les tokens avec un tokeniseur tiers.
 - **Mode hors-ligne.** `--no-llm` s'arrête après l'extraction locale et laisse les documents
   en `pending` : utile en CI, pour le développement et pour auditer le portail déterministe.
+- **Prérequis d'identification :** exporter `ANTHROPIC_API_KEY`, ou bien installer la CLI `ant`
+  et faire `ant auth login`. Les profils OAuth de `ant` sont lus automatiquement par les SDK
+  officiels, mais pas par un client HTTP maison : dans ce cas, récupérer un jeton éphémère via
+  `ant auth print-credentials --access-token` et l'envoyer en en-têtes `Authorization: Bearer`
+  et `anthropic-beta: oauth-2025-04-20` (et non `x-api-key`). Aucune information
+  d'identification n'est jamais écrite dans le dépôt ni dans les sidecars.
 
 Ordre de grandeur de coût (à confirmer par `count_tokens` sur le corpus réel) :
 
@@ -307,8 +325,8 @@ Ordre de grandeur de coût (à confirmer par `count_tokens` sur le corpus réel)
 
 ### 4.5 Extraction locale (déterministe, sans LLM)
 
-Outils vérifiés présents sur la machine : `pdftotext` 26.01, `pdftoppm`, `pdfinfo`,
-`pdfimages`, `pdftocairo`, `ghostscript`, `ocrmypdf`, `tesseract` 5.5 avec
+Outils vérifiés présents sur la machine de développement : `pdftotext` 26.01, `pdftoppm`,
+`pdfinfo`, `pdfimages`, `pdftocairo`, `ghostscript`, `ocrmypdf`, `tesseract` 5.5 avec
 `eng`/`fra`/`rus`/`osd`.
 
 Chaîne :
@@ -333,22 +351,23 @@ une donnée de reproductibilité).
 ### 4.6 Transactions, verrou, rollback
 
 - **Verrou.** `flock` exclusif sur `tripapiers.lock`, clé unique partagée par **toutes** les
-  commandes mutatives (équivalent du groupe `pipeline-google-drive`). Simplification par
-  rapport à Hermes : `flock` est libéré par le noyau à la mort du processus, donc pas besoin
-  du contrôle de vivacité PID + heure de démarrage. Perte du verrou ⇒ sortie immédiate,
-  clôture explicite dans le ledger, aucune écriture, **jamais** d'héritage du statut réussi
-  d'une exécution précédente.
+  commandes mutatives. Simplification par rapport à Hermes : `flock` est libéré par le noyau à
+  la mort du processus, donc pas besoin du contrôle de vivacité PID + heure de démarrage.
+  Perte du verrou ⇒ sortie immédiate, clôture explicite dans le ledger, aucune écriture,
+  **jamais** d'héritage du statut réussi d'une exécution précédente.
 - **Transaction de classement** (un seul document) : inventaire → sélection d'un `pending` →
-  extraction → analyse → construction du sidecar → vérification → écriture (tmp + `fsync` +
-  `rename`) → déplacement du document (`rename` intra-système de fichiers, sinon copie +
-  `fsync` + suppression vers `.TRASH`) → relecture depuis le disque et audit `DATE` →
+  extraction → analyse → construction du sidecar → écriture (tmp + `fsync` + `rename`) →
+  déplacement du document (`rename` intra-système de fichiers, sinon copie + `fsync` +
+  suppression vers `.TRASH`) → **contrôle en ligne** (relecture depuis le disque, comparaison
+  octet à octet avec le sidecar reconstruit, vérification du checksum du document déplacé) →
   mise à jour du registre du lot.
 - **Journal de rollback** : chaque étape mutative écrit son intention avant de l'exécuter ;
-  au démarrage, `tripapiers doctor` détecte un journal non clôturé et propose l'annulation.
+  au démarrage, le pipeline détecte un journal non clôturé, refuse de démarrer une nouvelle
+  transaction et propose l'annulation.
 - **Ledger** SQLite (`rusqlite`) avec états `claimed` / `running` / terminaux, pour
   l'observabilité et le diagnostic — pas comme primitive d'exclusion.
 
-### 4.7 Invariants locaux (adaptation de `architecture.md` §10)
+### 4.7 Invariants
 
 1. un seul document par transaction de classement ;
 2. un document physique vit dans `DATE`, jamais dans `STRUCTURE` ;
@@ -358,19 +377,25 @@ une donnée de reproductibilité).
 5. le LLM ne sérialise pas le YAML canonique et ne touche pas au système de fichiers ;
 6. aucun dossier `CATEGORY` n'est créé ;
 7. aucune commande mutative concurrente (verrou unique) ;
-8. une erreur de verrou, de journal ou de ledger provoque un échec fermé ;
+8. une erreur de verrou, de journal, de ledger ou de contrôle en ligne provoque un échec fermé ;
 9. les suppressions passent par `.TRASH/`, jamais `unlink` direct ;
 10. aucun rapport intermédiaire pendant le traitement d'un lot ; un seul rapport final ;
 11. `STRUCTURE` est intégralement reproductible depuis `DATE` + `.CONFIG` ;
 12. les inventaires sont bornés au parent exact, sans suivre les liens symboliques ;
-13. **(ajout local)** tout verdict LLM est mémorisé et rejouable hors ligne.
+13. tout verdict LLM est mémorisé et rejouable hors ligne.
+
+Le pipeline **maintient** ces invariants. Le composant optionnel les **contrôle** de façon
+indépendante ; la correspondance invariant → contrôle est donnée dans
+[`verification.md`](verification.md) §6.
 
 ---
 
 ## 5. Phases de développement
 
 Chaque phase est livrable et testable seule. Les phases 0 à 3 ne nécessitent **aucune clé
-d'API**.
+d'API**. Les phases du composant optionnel sont numérotées séparément (V1…V3) dans
+[`verification.md`](verification.md) §7 et peuvent être menées en parallèle à partir de la
+phase 1.
 
 ### Phase 0 — Squelette et configuration
 - Workspace Cargo, `clap`, `tracing`, `anyhow`/`thiserror`, CI (`fmt`, `clippy -D warnings`, `test`).
@@ -378,13 +403,13 @@ d'API**.
   règles `assign_only_listed_categories` / `allow_multiple_categories` /
   `uncertain_category_action`).
 - Parseur du DSL `structure.yml` (§4.3) + `StructurePlan`.
-- **Recette :** tests dorés sur les deux fichiers réels de `hermes-documents`, plus variantes
+- **Recette :** tests dorés sur les deux fichiers de configuration réels, plus variantes
   et cas d'erreur. `tripapiers config check` sort 0/non-0.
 
 ### Phase 1 — Cœur déterministe
 - Types du domaine, tags `nom:` / `cat:`, normalisation de nom de fichier
   `NOM_Prenom_Titre.ext` (translittération, longueur, collisions → suffixe déterministe).
-- `build_sidecar` / `verify_sidecar` (§4.2), émetteur YAML canonique, SHA-256.
+- `build_sidecar` (§4.2), émetteur YAML canonique, SHA-256.
 - **Recette :** tests de propriété (round-trip, stabilité octet-à-octet, idempotence), tests
   d'instantané sur les sidecars, jeu de cas limites (dates ambiguës, personnes multiples,
   catégories multiples, catégorie inconnue ⇒ rejet).
@@ -393,12 +418,13 @@ d'API**.
 - `crates/store` : inventaire `INBOX` borné, écriture atomique, `rename`, `.TRASH` + `restore`,
   journal de rollback.
 - `crates/pipeline` : verrou `flock`, ledger SQLite, registre de lot
-  (`pending`/`classified`/`blocked`), rapport final unique.
+  (`pending`/`classified`/`blocked`), contrôle en ligne après écriture, rapport final unique.
 - Analyse injectée (trait `Analyzer` avec implémentation de test) : **le pipeline complet
   fonctionne sans LLM**.
 - **Recette :** tests d'intégration sur dépôt temporaire (`assert_fs`), injection de panne à
   chaque étape ⇒ vérifier qu'aucun état intermédiaire n'est observable ; test de concurrence
-  (deux processus, un seul obtient le verrou) ; test « aucun rapport avant état terminal du lot ».
+  (deux processus, un seul obtient le verrou) ; test « aucun rapport avant état terminal du lot » ;
+  test « sidecar corrompu artificiellement entre écriture et relecture ⇒ transaction annulée ».
 
 ### Phase 3 — Extraction locale
 - Enveloppes `pdfinfo` / `pdftotext` / `pdftoppm` / `tesseract` avec arguments figés, timeouts,
@@ -419,12 +445,6 @@ d'API**.
 - **Recette :** tests hors ligne via serveur HTTP simulé (`httpmock`/`wiremock`) couvrant
   refus, 429, 5xx, JSON hors schéma, catégorie inconnue, troncature ; test de rejeu du cache ;
   **un** test d'intégration marqué `#[ignore]` frappant la vraie API.
-- **Prérequis d'identification :** exporter `ANTHROPIC_API_KEY`, ou bien installer la CLI `ant`
-  et faire `ant auth login`. Les profils OAuth de `ant` sont lus automatiquement par les SDK
-  officiels, mais pas par un client HTTP maison : dans ce cas, récupérer un jeton éphémère via
-  `ant auth print-credentials --access-token` et l'envoyer en en-têtes `Authorization: Bearer`
-  et `anthropic-beta: oauth-2025-04-20` (et non `x-api-key`). Aucune information
-  d'identification n'est jamais écrite dans le dépôt ni dans les sidecars.
 
 ### Phase 5 — Reconstruction de `STRUCTURE`
 - Planification depuis les sidecars valides de `DATE` + `StructurePlan`.
@@ -439,9 +459,10 @@ d'API**.
   `STRUCTURE` obtenue par une suite d'incréments (comparaison arborescence + cibles de liens) ;
   aucun fichier physique dans `STRUCTURE` ; aucun lien pendant.
 
-### Phase 6 — Supervision, rapport, recatégorisation, propositions
-- `verify` : audit `DATE` (unicité des sidecars, checksums, chemins dérivés) et intégrité
-  `STRUCTURE`.
+### Phase 6 — Rapport, recatégorisation, propositions
+- `report` : rapport final unique distinguant classés automatiquement / réellement tentés mais
+  bloqués / contrôle qualité / propositions. Les `pending` ne sont jamais présentés comme des
+  échecs.
 - `recategorize` : relance l'analyse **sur la transcription déjà stockée** dans les sidecars
   après changement de `category.yml`, remplace uniquement les tags `cat:` validés, ne touche
   à aucun document physique, puis déclenche la prise en compte par `STRUCTURE`.
@@ -449,20 +470,15 @@ d'API**.
   extraction.)*
 - `propose list|approve` : propositions taxonomiques idempotentes, avec preuve documentaire,
   jamais écrites automatiquement dans `category.yml`, jamais promues en tag `cat:`.
-- `report` : rapport final unique distinguant classés automatiquement / réellement tentés mais
-  bloqués / contrôle qualité / propositions. Les `pending` ne sont jamais présentés comme des
-  échecs.
-- `doctor` : préflight de reprise après incident (§12 de `architecture.md`) — pas d'exécution
-  vivante, cohérence du ledger, intégrité de `DATE`, unicité des sidecars, conformité de
-  `STRUCTURE`, journaux non clôturés.
 
 ### Phase 7 — Empaquetage et migration
-- `README`, page de manuel, unité systemd `--user` + timer en remplacement des crons Hermes
-  (`classify` toutes les 15 min, `structure` en décalé, `verify` quotidien) — avec le verrou
-  unique comme seule garantie d'exclusion.
-- `import` : adoption d'une arborescence `DATE` existante produite par le pipeline Drive
+- `README`, page de manuel, unité systemd `--user` + timer (`classify` toutes les 15 min,
+  `structure` en décalé) — avec le verrou unique comme seule garantie d'exclusion.
+- `import` : adoption d'une arborescence `DATE` existante produite par le pipeline d'origine
   (validation des sidecars, reconstruction de l'état local, aucun appel LLM).
 - Journal des versions de prompt/schéma/seuils et procédure d'invalidation du cache.
+- Deux profils de distribution : avec et sans le composant de vérification
+  ([`verification.md`](verification.md) §5).
 
 ---
 
@@ -485,26 +501,29 @@ d'API**.
 
 ---
 
-## 7. Vérification de bout en bout
+## 7. Recette du pipeline
 
-1. **Sans réseau** — `cargo test --workspace` : couvre config, DSL, sidecar, transactions,
-   extraction, adaptateur LLM (serveur simulé + rejeu du cache). C'est la porte de CI.
-2. **Corpus synthétique** — `cargo run -p tripapiers-cli -- --root <tmp> classify --all --no-llm`
-   puis avec analyseur injecté : vérifier `DATE`, sidecars, registre, rapport unique.
+Ces tests portent sur le traitement lui-même et **n'utilisent pas** le composant optionnel de
+vérification (sa propre recette est en [`verification.md`](verification.md) §8).
+
+1. **Sans réseau** — `cargo test --workspace --exclude tripapiers-verify` : couvre config, DSL,
+   sidecar, transactions, extraction, adaptateur LLM (serveur simulé + rejeu du cache).
+   C'est la porte de CI du composant obligatoire.
+2. **Corpus synthétique** — `tripapiers --root <tmp> classify --all --no-llm`, puis avec
+   analyseur injecté : vérifier `DATE`, sidecars, registre, rapport unique.
 3. **Reconstruction** — `structure --full`, puis `structure --incremental` après ajout/retrait
    de documents, puis comparer à un `--full` neuf : arborescences identiques.
-4. **Vérification indépendante** — `verify all` doit sortir 0 sur un dépôt sain, non-0 sur
-   chaque corruption injectée (checksum modifié, sidecar dupliqué, lien pendant, fichier
-   physique dans `STRUCTURE`).
-5. **Résistance à l'interruption** — `SIGKILL` à chaque point du journal, puis `doctor` :
-   l'état doit être classé récupérable et le rollback rétablir l'état d'avant transaction.
-6. **Concurrence** — deux processus `classify` simultanés : un seul travaille, l'autre sort
+4. **Résistance à l'interruption** — `SIGKILL` à chaque point du journal, puis relance :
+   le journal non clôturé doit être détecté et le rollback rétablir l'état d'avant transaction.
+5. **Concurrence** — deux processus `classify` simultanés : un seul travaille, l'autre sort
    proprement avec clôture au ledger.
-7. **API réelle** — `cargo test -- --ignored` sur un mini-corpus de 5 documents avec une clé
+6. **API réelle** — `cargo test -- --ignored` sur un mini-corpus de 5 documents avec une clé
    valide : vérifier `stop_reason`, `usage.cache_read_input_tokens` non nul au second appel,
    conformité du JSON, coût enregistré.
-8. **Reproductibilité** — deux exécutions complètes sur le même corpus doivent produire des
+7. **Reproductibilité** — deux exécutions complètes sur le même corpus doivent produire des
    sidecars **identiques octet à octet** (la seconde servie par le cache).
+8. **Build sans le composant optionnel** — `cargo build -p tripapiers-cli` après retrait de
+   `crates/verify` du workspace : doit compiler et passer les tests 1 à 7.
 
 ---
 
@@ -516,8 +535,8 @@ d'API**.
    confirmer notamment le sens de `an:` (année de la date primaire ?) et le comportement des
    frères comme alternatives cumulatives.
 3. **Liste des personnes** : `category.yml` catalogue les catégories, mais aucun fichier ne
-   catalogue les `nom:`. Faut-il un `.CONFIG/persons.yml` autoritaire (recommandé, cohérent avec
-   « personnes vérifiées » de `architecture.md` §5) ou les noms sont-ils libres ?
+   catalogue les `nom:`. Faut-il un `.CONFIG/persons.yml` autoritaire (recommandé) ou les noms
+   sont-ils libres ?
 4. **Langues d'OCR** : `fra+eng` par défaut ; `rus` est installé — à activer ou non.
 5. **Types d'entrée** : PDF et images au départ. Les formats bureautiques (`.docx`, `.odt`)
    sont hors périmètre initial — à confirmer.

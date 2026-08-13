@@ -18,9 +18,18 @@ Trois principes :
 
 ## État
 
-**Conception.** Ce dépôt ne contient pour l'instant aucun code d'exécution. La conception
-complète, les invariants et le découpage en phases sont dans
-[`doc/plan-de-developpement.md`](doc/plan-de-developpement.md).
+**Conception.** Ce dépôt ne contient pour l'instant aucun code d'exécution. La conception est
+découpée en deux documents, correspondant aux deux composants du projet :
+
+| Document | Composant |
+|---|---|
+| [`doc/traitement-des-fichiers.md`](doc/traitement-des-fichiers.md) | Le pipeline de classement `INBOX → DATE → STRUCTURE` — **obligatoire** |
+| [`doc/verification.md`](doc/verification.md) | L'audit indépendant du corpus — **optionnel** |
+
+Le pipeline classe et archive sans le second composant : il conserve un contrôle en ligne,
+non désactivable, qui relit et revérifie chaque document au moment de son écriture. Le
+composant de vérification apporte autre chose — un audit *a posteriori* de tout le corpus,
+réimplémenté indépendamment du code qui a produit les fichiers.
 
 ## Prérequis prévus
 
