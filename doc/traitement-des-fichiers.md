@@ -159,9 +159,12 @@ namespaces:
       le rôle aux désigne une personne seulement mentionnée. Un document peut
       avoir PLUSIEURS personnes principales : un contrat de bail engage le
       bailleur et le locataire, tous deux en prin. Émets-les toutes.
+      Il peut aussi n'en avoir AUCUNE : un formulaire vierge, une notice, un
+      barème tarifaire ne concernent personne en particulier. Dans ce cas
+      n'émets aucun tag nom: — n'invente pas de destinataire.
       Exemples : nom:prin:DUPONT_Marie / nom:prin:MARTIN_Paul / nom:aux:BERNARD_Luc
     roles: [prin, aux]
-    cardinality: { min: 1, max: 8 }
+    cardinality: { min: 0, max: 8 }        # 0 : document impersonnel (§6)
     catalogue: persons.yml                 # optionnel — cf. §11 point 3
 
   - name: cat
@@ -418,7 +421,7 @@ schema_version: 1
 required:
   - { namespace: titre,               min: 1, max: 1 }
   - { namespace: date, role: prin,    min: 1, max: 1 }
-  - { namespace: nom,  role: prin,    min: 1 }          # PAS de max : cf. encadré
+  - { namespace: nom,  role: prin,    min: 0 }          # ni min ni max : cf. encadré
   - { namespace: cat,                 min: 1 }
 
 confidence:                     # le verdict sur l'OCR (§3.3)
@@ -454,10 +457,19 @@ on_failure:                     # que faire selon CE QUI a échoué
 > une attestation qui ne le concerne pas directement. La distinction est donc « partie » vs
 > « mentionné », pas « le plus important » vs « les autres ».
 >
-> Il n'y a donc **pas de `max` sur `nom:prin:`** ; le total reste borné par
-> `cardinality.max: 8` de `tags.yml`. Deux conséquences, traitées §8.3 et §8.4 : la dérivation
-> du nom de fichier doit choisir, et la vue `STRUCTURE` fait apparaître le document sous
-> **chaque** personne principale — c'est précisément ce qu'on veut d'un bail.
+> **Et il peut n'y en avoir aucune.** Un formulaire administratif vierge, une notice, un barème
+> tarifaire, une plaquette d'information ne concernent personne en particulier. Exiger au moins
+> une personne forcerait le modèle à en désigner une — le plus souvent l'émetteur du document
+> ou un nom aperçu dans un pied de page — et produirait un classement faux, sous une personne
+> qui n'a rien à voir avec le document. Mieux vaut un document sans personne qu'un document
+> attribué à tort.
+>
+> Il n'y a donc **ni `min` ni `max` sur `nom:prin:`** ; le total reste borné par
+> `cardinality.max: 8` de `tags.yml`. Trois conséquences, traitées §8.3 et §8.4 : la dérivation
+> du nom de fichier doit choisir quand il y a plusieurs personnes **et se passer d'elles quand
+> il n'y en a aucune** ; la vue `STRUCTURE` fait apparaître le document sous **chaque** personne
+> principale — ce qu'on veut d'un bail ; et un document sans personne ne doit pas pour autant
+> devenir invisible dans `STRUCTURE`, ce qui est le vrai piège.
 
 > **Pourquoi l'issue dépend de la règle en défaut.** Escalader, c'est refaire l'OCR. Ça n'a de
 > sens que si le problème vient du **texte**. Un `confiance:45` dit exactement cela : le texte
@@ -655,11 +667,19 @@ rend la vérification indépendante possible. La lecture passe par un parseur YA
 octets réels, dérive `DATE/YYYY/MM/DD` depuis `date:prin:`, et sérialise. La fonction miroir
 `verify_sidecar` appartient au composant optionnel ([`verification.md`](verification.md) §3).
 
-**Nom de fichier et personnes principales multiples.** Le gabarit `NOM_Prenom_Titre.ext` suppose
-une seule personne ; un bail en a deux. Trois issues étaient possibles — concaténer les noms
-(chemins longs, plafond de 255 octets vite atteint), omettre le nom quand il y en a plusieurs
-(gabarit incohérent), ou en choisir un. Règle retenue : **le nom de fichier reprend la personne
-principale première dans l'ordre lexicographique**, les autres n'apparaissent que dans les tags.
+**Nom de fichier et nombre de personnes principales.** Le gabarit devient
+`[NOM_Prenom_]Titre.ext` — la partie personne est **optionnelle** :
+
+| `nom:prin:` | Nom de fichier | Exemple |
+|---|---|---|
+| une | `NOM_Prenom_Titre.ext` | `DUPONT_Marie_ordonnance-dr-martin.pdf` |
+| plusieurs | première dans l'ordre lexicographique | `DUPONT_Marie_contrat-bail.pdf` |
+| aucune | `Titre.ext` — le titre seul | `formulaire-cerfa-14011-vierge.pdf` |
+
+Pour le cas *plusieurs*, trois issues étaient possibles — concaténer les noms (chemins longs,
+plafond de 255 octets vite atteint), omettre le nom (gabarit incohérent), ou en choisir un.
+Règle retenue : **la personne principale première dans l'ordre lexicographique**, les autres
+n'apparaissent que dans les tags.
 
 C'est cohérent avec la séparation qui structure tout le dépôt : `DATE` est le stockage
 *physique*, où chaque document existe une fois et à un seul endroit ; `STRUCTURE` est la vue
@@ -716,6 +736,30 @@ personnes principales reçoit un lien symbolique sous chacune d'elles.** Un bail
 dossier du bailleur et dans celui du locataire, avec la même cible physique dans `DATE` — un seul
 fichier, deux chemins d'accès. C'est exactement le service que rend la vue logique, et la raison
 pour laquelle `nom:prin:` n'a pas de plafond (§6).
+
+**L'éventail sur l'ensemble vide est le vrai piège.** Un ensemble vide produit zéro branche, donc
+zéro lien. Or le `structure.yml` actuel fait passer **tous** les chemins par un éventail `nom:`
+au premier niveau : un document sans personne principale serait correctement archivé dans `DATE`,
+correctement étiqueté, et **totalement absent de `STRUCTURE`**. Il n'apparaîtrait nulle part, sans
+la moindre erreur — le pire mode de défaillance possible pour un outil de classement, parce que
+rien ne le signale.
+
+*Proposition : un éventail sur un ensemble vide produit une branche unique, nommée par un
+substitut déclaré dans la configuration* — `placeholder: _sans-personne` sur le niveau concerné,
+avec une valeur par défaut par espace de noms. Le formulaire vierge se retrouve alors sous
+`STRUCTURE/_sans-personne/gouvernement/…`, reproductible et navigable. Le préfixe `_` le fait
+trier avant les noms propres et le distingue visuellement d'une personne réelle.
+
+*Alternative écartée : faire « tomber » le niveau vide et rattacher les enfants au parent.* Elle
+évite le dossier substitut mais mélange les profondeurs dans la vue — certaines catégories à la
+racine, d'autres sous une personne — ce qui casse la lisibilité et complique la comparaison entre
+reconstruction complète et incrémentale.
+
+Quelle que soit l'option retenue, la garantie doit être vérifiable, d'où l'invariant 18 (§10) :
+**tout document classé est joignable par au moins un chemin logique**. C'est un contrôle
+générique, qui attrape cette classe de bogue au-delà du seul cas `nom:` — un filtre trop étroit,
+une catégorie absente de `structure.yml`, une branche mal conditionnée produisent le même
+silence.
 
 Conséquence à ne pas manquer côté reconstruction : le plan attendu associe *plusieurs* chemins
 logiques à un même document, et une reconstruction incrémentale doit les ajouter ou les retirer
@@ -783,7 +827,10 @@ Contraintes :
 15. **aucune ligne non conforme n'est réparée** : elle est ignorée, comptée et journalisée ;
 16. **un échec d'évaluation déplace le document en `QUARANTAINE`**, avec son dossier de preuve ;
      une panne d'infrastructure, elle, le laisse `pending` ;
-17. **le prompt est engendré depuis `.CONFIG`**, jamais écrit en dur dans le code Rust.
+17. **le prompt est engendré depuis `.CONFIG`**, jamais écrit en dur dans le code Rust ;
+18. **tout document classé est joignable par au moins un chemin logique** dans `STRUCTURE` — un
+     document correctement archivé mais invisible dans la vue est un échec silencieux, donc le
+     plus dangereux.
 
 Le pipeline **maintient** ces invariants. Le composant optionnel les **contrôle** de façon
 indépendante ; la correspondance invariant → contrôle est en
@@ -814,8 +861,26 @@ indépendante ; la correspondance invariant → contrôle est en
 5. **Issue par défaut de `missing_required`** (§6). `escalate` est prudent mais paie un appel
    vision pour des documents dont le texte était déjà bon. À revoir après la première
    calibration, avec les chiffres sous les yeux.
-6. **Langues d'OCR** : `fra+eng` par défaut ; `rus` est installé — à activer ou non.
-7. **Types d'entrée** : PDF et images au départ. Formats bureautiques (`.docx`, `.odt`) hors
+6. **Documents sans date.** `nom:prin:` est désormais facultatif (§6), mais `date:prin:` reste
+   obligatoire parce qu'il **dérive le chemin d'archivage** `DATE/YYYY/MM/DD`. Or l'exemple qui
+   a motivé le changement — le formulaire administratif vierge — n'a généralement ni personne
+   *ni date* : il partirait donc quand même en quarantaine, et la correction serait inutile pour
+   le cas visé. Trois options :
+   - **repli sur la date d'ingestion**, enregistrée comme telle (`source.date_origine:
+     document | ingestion`) pour qu'elle ne soit jamais confondue avec une date portée par le
+     document. Recommandé : le document reste classé et joignable, et la provenance de la date
+     est explicite et vérifiable ;
+   - **repli sur la date de modification du fichier**, souvent plus proche de la réalité pour un
+     scan, mais fragile — une copie ou une synchronisation la réécrit ;
+   - **maintenir l'exigence** et assumer que ces documents partent en quarantaine, où `requeue`
+     permet de les traiter à la main.
+
+   Le choix touche la dérivation du chemin, donc un invariant central : à trancher avant la
+   phase 1, pas pendant.
+7. **Substitut d'éventail vide** (§8.4) : nom du dossier (`_sans-personne` proposé) et portée du
+   réglage — par niveau, ou par espace de noms dans `tags.yml`.
+8. **Langues d'OCR** : `fra+eng` par défaut ; `rus` est installé — à activer ou non.
+9. **Types d'entrée** : PDF et images au départ. Formats bureautiques (`.docx`, `.odt`) hors
    périmètre initial — à confirmer.
 
 ---
@@ -851,9 +916,10 @@ phase 1.
   idempotence) ; **corpus de réponses LLM pathologiques** — prose d'introduction, puces,
   numérotation, blocs de code, balises internes, tags tronqués en fin de flux, espaces de noms
   inconnus, doublons, casse inattendue, ligne de 10 ko — chacune doit être ignorée sans panique
-  et comptée au bon motif ; table de décision complète du moteur d'évaluation, dont le cas
-  **plusieurs `nom:prin:`** (accepté, contrairement à plusieurs `date:prin:`) et le nom de
-  fichier stable quel que soit l'ordre d'émission des personnes par le modèle.
+  et comptée au bon motif ; table de décision complète du moteur d'évaluation, dont les cas
+  **plusieurs `nom:prin:`** (accepté, contrairement à plusieurs `date:prin:`) et **zéro
+  `nom:prin:`** (accepté, gabarit de nom de fichier réduit au titre) ; nom de fichier stable
+  quel que soit l'ordre d'émission des personnes par le modèle.
 
 ### Phase 2 — Stockage local, transactions et quarantaine
 - `crates/store` : inventaire `INBOX` borné, écriture atomique, `rename`, `.TRASH` + `restore`,
@@ -900,7 +966,9 @@ phase 1.
   celle obtenue par une suite d'incréments ; aucun fichier physique dans `STRUCTURE` ; aucun
   lien pendant ; cas hiérarchiques (`cat:a:b:c`, filtre par préfixe, rôles `nom:`) ; **document à
   plusieurs `nom:prin:`** — un lien sous chaque partie, tous vers la même cible, ajoutés et
-  retirés ensemble lors d'un incrément qui fait disparaître l'une des parties des tags.
+  retirés ensemble lors d'un incrément qui fait disparaître l'une des parties des tags ;
+  **document sans `nom:prin:`** — l'éventail vide produit la branche substitut et le document
+  reste joignable (invariant 18), en reconstruction complète comme en incrémentale.
 
 ### Phase 6 — Rapport, réétiquetage, propositions
 - `report` : rapport final unique distinguant classés / mis en quarantaine avec la règle en

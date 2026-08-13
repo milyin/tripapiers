@@ -84,8 +84,8 @@ Relit les deux fichiers depuis le disque et recontrôle, indépendamment :
 | Rôles | tout tag d'un espace à rôles porte un rôle déclaré (`prin`/`aux`), et les cardinalités par rôle sont respectées |
 | Valeurs | chaque valeur passe le `value_pattern` de son espace, ou appartient à son `catalogue:` quand il en déclare un |
 | Tags `date:` | `date:prin:` unique et analysable ; toute valeur `date:` au format `AAAA-MM-JJ` et représentant une date réelle |
-| Tags `nom:` | forme `NOM_Prenom` ; **au moins un** `nom:prin:` — plusieurs sont légitimes (bail, acte de vente) ; présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
-| Nom de fichier | le nom du document reprend bien la personne principale première dans l'ordre lexicographique, et le titre issu de `titre:` |
+| Tags `nom:` | forme `NOM_Prenom` ; `nom:prin:` en **nombre quelconque, zéro compris** — plusieurs pour un bail ou un acte de vente, aucun pour un formulaire vierge ; présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
+| Nom de fichier | gabarit `[NOM_Prenom_]Titre.ext` : partie personne présente si et seulement si le sidecar porte au moins un `nom:prin:`, et valant alors la première dans l'ordre lexicographique ; titre issu de `titre:` |
 | Tags `cat:` | chaque chemin de catégorie existe dans `category.yml`, segment par segment ; cardinalité respectée |
 | Règles d'évaluation | les tags du sidecar satisfont encore `.CONFIG/evaluation.yml` — un document classé sous d'anciennes règles et devenu non conforme est signalé |
 | Ordre canonique | la liste `tags:` est triée lexicographiquement et sans doublon |
@@ -122,6 +122,13 @@ Parcours borné de `DATE/YYYY/MM/DD`, sans suivre les liens symboliques :
   attendu à partir des sidecars valides de `DATE` et de `structure.yml`, puis compare
   l'ensemble `(chemin logique → cible)` à ce qui est réellement sur le disque. Toute
   divergence — branche manquante, branche en trop, cible erronée — est signalée.
+- **Joignabilité (invariant 18)** : **tout** document de `DATE` possède au moins un chemin
+  logique dans `STRUCTURE`. C'est le contrôle qui attrape les échecs silencieux — un document
+  correctement archivé, correctement étiqueté, et pourtant invisible dans la vue. Les causes
+  sont variées et ne se ressemblent pas : un éventail sur un ensemble vide (document sans
+  `nom:prin:`), une catégorie absente de `structure.yml`, un filtre trop étroit, une branche mal
+  conditionnée. Le rapport nomme le document *et* la raison pour laquelle aucune branche ne l'a
+  retenu, sans quoi le diagnostic est impossible.
 - **Aucun dossier `CATEGORY`** à la racine (invariant 6).
 
 ### 4.3 Audit `QUARANTAINE`
@@ -202,6 +209,7 @@ Reprise des invariants de [`traitement-des-fichiers.md`](traitement-des-fichiers
 | 15 | lignes non conformes ignorées, jamais réparées | §3 (grammaire, valeurs) — une valeur « réparée » se voit comme une valeur hors catalogue | indirectement |
 | 16 | échec d'évaluation ⇒ `QUARANTAINE` avec preuve | §4.3 | oui |
 | 17 | prompt engendré depuis `.CONFIG` | empreinte du prompt rendu, recalculée depuis `.CONFIG` et comparée à celle des rapports | oui |
+| 18 | tout document joignable dans `STRUCTURE` | §4.2, contrôle de joignabilité | oui |
 
 Les quatre invariants marqués « propriété d'exécution » ne sont pas auditables après coup :
 ils sont garantis par la conception du pipeline et couverts par ses propres tests
@@ -256,7 +264,10 @@ phase 1 du pipeline (cœur déterministe, contrat YAML) est figée ; V3 dépend 
 - Contrôles du §4.2, dont la recomparaison du plan attendu contre le disque.
 - `doctor` (§5) avec lecture des états locaux et code de sortie motivé.
 - **Recette :** injections — lien pendant, cible hors `DATE`, fichier physique déposé dans
-  `STRUCTURE`, branche supprimée à la main, `structure.yml` modifié sans reconstruction.
+  `STRUCTURE`, branche supprimée à la main, `structure.yml` modifié sans reconstruction,
+  **document injoignable** : un sidecar sans `nom:prin:` classé alors que `structure.yml` fait
+  passer tous ses chemins par un éventail `nom:` — le contrôle de joignabilité doit le nommer
+  et dire quelle branche a échoué à le retenir.
   Pour `doctor` : ledger avec transaction ouverte, journal non clôturé, registre de lot
   désynchronisé de `INBOX`.
 
