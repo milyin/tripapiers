@@ -9,10 +9,9 @@
 
 ## 1. Contexte et objectif
 
-`hermes-documents` ne contient que de la documentation : `architecture.md`, `README.md`,
-`.CONFIG/category.yml`, `.CONFIG/structure.yml`. Le pipeline y est décrit mais son code
-d'exécution vit dans Hermes Agent, couplé à Google Drive et à un agent LLM qui pilote
-l'ensemble du classement.
+`hermes-documents` ne contient que de la documentation et de la configuration. Le pipeline y
+est décrit mais son code d'exécution vit dans Hermes Agent, couplé à Google Drive et à un agent
+LLM qui pilote l'ensemble du classement.
 
 `tripapiers` reprend ce pipeline comme **application autonome, locale et prédictible** :
 
@@ -174,13 +173,85 @@ namespaces:
 
   - name: cat
     prompt: |-
-      Chaque catégorie du document. Les catégories sont hiérarchiques : émets le
-      chemin complet, du plus général au plus précis.
+      Chaque catégorie applicable au document, parmi les valeurs déclarées
+      ci-dessous. Émets le nom complet de chaque valeur retenue.
       Exemple :
-      cat:sante:ordonnance
-    cardinality: { min: 1, max: 4 }
-    catalogue: category.yml
-    hierarchical: true
+      cat:ordonnance
+    cardinality: { min: 1, max: 8 }
+    values:
+      - name: cat:assurance
+        description: >-
+          Attribuer aux contrats, attestations, échéanciers, garanties, sinistres
+          et courriers émis par un assureur, hors documents médicaux qui ne
+          concernent que les soins.
+      - name: cat:banque
+        description: >-
+          Attribuer aux relevés, moyens de paiement, crédits, comptes, opérations
+          ou correspondances d'un établissement bancaire.
+      - name: cat:caution
+        description: >-
+          Attribuer aux actes de caution, garanties personnelles, engagements de
+          garant et certificats directement liés à une caution.
+      - name: cat:consultation
+        description: >-
+          Sous-type médical pour les convocations, comptes rendus, demandes ou
+          documents liés à une consultation avec un professionnel de santé.
+      - name: cat:diagnostic
+        description: >-
+          Attribuer aux diagnostics techniques d'un logement, notamment DPE,
+          électricité, gaz, risques, amiante ou surface.
+      - name: cat:education
+        description: >-
+          Attribuer aux diplômes, certificats de scolarité, inscriptions, relevés
+          de notes, formations et documents d'établissement d'enseignement.
+      - name: cat:emploi
+        description: >-
+          Attribuer aux contrats de travail, attestations employeur, bulletins de
+          salaire, candidatures et documents professionnels.
+      - name: cat:gouvernement
+        description: >-
+          Catégorie générale pour les documents officiels délivrés, enregistrés
+          ou certifiés par une administration publique.
+      - name: cat:honoraires
+        description: >-
+          Sous-type médical pour les factures, notes d'honoraires, feuilles de
+          soins et justificatifs de paiement de professionnels de santé.
+      - name: cat:loyer
+        description: >-
+          Attribuer aux quittances, avis d'échéance, appels de loyer et
+          justificatifs de paiement ou de dette locative.
+      - name: cat:logement
+        description: >-
+          Attribuer aux baux, états des lieux, dossiers locatifs, courriers de
+          propriétaire ou d'agence et autres documents concernant un logement.
+      - name: cat:medecine
+        description: >-
+          Catégorie générale pour les documents relatifs à la santé, aux soins,
+          aux professionnels de santé et au suivi médical.
+      - name: cat:analyse
+        description: >-
+          Sous-type médical pour les prescriptions, demandes ou résultats
+          d'analyses biologiques, de laboratoire, d'imagerie ou d'examens médicaux.
+      - name: cat:ordonnance
+        description: >-
+          Sous-type médical pour une prescription de médicaments, de soins, de
+          matériel, de séances ou d'examens établie par un professionnel de santé.
+      - name: cat:passeport
+        description: >-
+          Attribuer aux passeports, copies de passeport et pages officielles qui
+          en font matériellement partie.
+      - name: cat:recherche
+        description: >-
+          Attribuer aux projets, rapports, publications, conventions ou documents
+          directement liés à une activité de recherche.
+      - name: cat:titre_de_sejour
+        description: >-
+          Attribuer aux titres de séjour, récépissés, demandes et décisions
+          administratives relatives au droit au séjour.
+      - name: cat:vaccination
+        description: >-
+          Sous-type médical pour les carnets, certificats, historiques et
+          justificatifs de vaccination.
 ```
 
 ### 3.3 `confiance:` — le verdict sur l'OCR
@@ -196,28 +267,21 @@ inhabituel doit donner `confiance:100` même si le modèle hésite sur la catég
 l'affaire des règles de cardinalité, pas de ce tag.
 
 > **Un pourcentage produit par un modèle n'est pas calibré.** `confiance:85` ne signifie pas
-> que 85 % des caractères sont corrects : c'est un jugement ordinal habillé en nombre. Trois
+> que 85 % des caractères sont corrects : c'est un jugement ordinal habillé en nombre. Deux
 > conséquences pratiques :
 > - le traiter comme un **score monotone à seuil**, jamais comme une probabilité ;
 > - demander un **arrondi au multiple de 5** — la fausse précision n'apporte rien et la
 >   granularité grossière améliore la reproductibilité d'une exécution à l'autre ;
-> - **calibrer le seuil sur le corpus réel**, pas *a priori* : `quarantaine list` groupé par
->   décile de `confiance:` montre où le poser (cf. §12, phase 4).
->
-> Le pourcentage reste préférable à une échelle `haute|moyenne|basse` : il se compare
-> directement, il tolère un ajustement fin du seuil sans retoucher le vocabulaire, et il se
-> croise avec les métriques locales, qui sont elles aussi numériques (§7).
 
-### 3.4 Continuité avec `category.yml`
+### 3.4 Catégories intégrées à `tags.yml`
 
-`category.yml` a déjà exactement cette forme — une entrée y est un `name: cat:<valeur>` assorti
-d'une `description` qui est une consigne d'attribution (« Attribuer aux relevés, moyens de
-paiement… »). C'est déjà « un tag avec son prompt » ; `tags.yml` ne fait que généraliser le
-procédé aux autres espaces de noms. Le fichier est donc conservé tel quel comme vocabulaire du
-seul espace `cat:`.
+Les valeurs fermées d'un espace de noms sont déclarées dans sa clé `values:`. Chaque entrée
+associe le tag complet (`name`) à sa consigne d'attribution (`description`) ; ces descriptions
+sont incluses dans le prompt rendu après la consigne générale de l'espace. Le vocabulaire de
+`cat:` et tous les autres paramètres d'étiquetage ont ainsi une autorité unique : `tags.yml`.
 
-**Conséquence à trancher (§11 point 1) :** le catalogue actuel encode déjà une hiérarchie, mais
-*en prose*. `cat:medecine` est décrite comme « catégorie générale », tandis que
+**Conséquence à trancher (§11 point 1) :** le vocabulaire actuel encode déjà une hiérarchie,
+mais *en prose*. `cat:medecine` est décrite comme « catégorie générale », tandis que
 `cat:consultation`, `cat:honoraires`, `cat:analyse`, `cat:ordonnance` et `cat:vaccination` sont
 décrites comme « sous-type médical pour… ». Le format hiérarchique rend cette structure
 explicite — `cat:medecine:ordonnance` plutôt que `cat:ordonnance` plus une phrase. La migration
@@ -567,7 +631,7 @@ tripapiers/
 ├── Cargo.toml                  # workspace
 ├── crates/
 │   ├── core/        # grammaire des tags, contrat YAML, checksum, dérivation de chemin
-│   ├── config/      # tags.yml, category.yml, evaluation.yml, structure.yml + rendu du prompt
+│   ├── config/      # tags.yml, evaluation.yml, structure.yml + rendu du prompt
 │   ├── extract/     # OCR locale : pdftotext, pdftoppm, tesseract, métriques de qualité
 │   ├── llm/         # client Claude (HTTP), appels tag et vision, analyseur de lignes
 │   ├── eval/        # moteur d'évaluation des tags, verdicts
@@ -602,8 +666,7 @@ Racine du dépôt documentaire, configurable (`--root`, `TRIPAPIERS_ROOT`) :
 ├── STRUCTURE/                  # vue logique : dossiers + liens symboliques uniquement
 ├── QUARANTAINE/                 # échecs d'évaluation, avec dossier de preuve
 ├── .CONFIG/
-│   ├── tags.yml                # espaces de noms + prompts  (nouveau)
-│   ├── category.yml            # vocabulaire de l'espace cat:
+│   ├── tags.yml                # espaces de noms, valeurs et prompts (nouveau)
 │   ├── evaluation.yml          # règles d'acceptation      (nouveau)
 │   └── structure.yml           # plan déclaratif de la vue logique
 └── .TRASH/                     # suppressions réversibles, horodatées
@@ -893,11 +956,11 @@ phase 1.
 
 ### Phase 0 — Squelette et configuration
 - Workspace Cargo, `clap`, `tracing`, `anyhow`/`thiserror`, CI (`fmt`, `clippy -D warnings`, `test`).
-- `crates/config` : chargement et validation de `tags.yml`, `category.yml`, `evaluation.yml`,
-  `structure.yml`. Contrôles croisés : tout `catalogue:` référencé existe, tout espace de noms
-  cité par `evaluation.yml` est déclaré dans `tags.yml`, l'espace visé par `confidence` déclare
-  bien `value_type: percent`, et `confidence.minimum` comme `divergence_locale` tiennent dans
-  0..100.
+- `crates/config` : chargement et validation de `tags.yml`, `evaluation.yml` et `structure.yml`.
+  Contrôles croisés : toute valeur fermée est déclarée dans son espace de noms, tout
+  `catalogue:` externe référencé existe, tout espace de noms cité par `evaluation.yml` est
+  déclaré dans `tags.yml`, l'espace visé par `confidence` déclare bien `value_type: percent`,
+  et `confidence.minimum` comme `divergence_locale` tiennent dans 0..100.
 - **Rendu déterministe du prompt** depuis le catalogue, avec son empreinte.
 - Parseur du DSL `structure.yml` + `StructurePlan`.
 - **Recette :** tests dorés sur les fichiers de configuration réels et sur le prompt rendu
@@ -973,8 +1036,8 @@ phase 1.
   défaut / contrôle qualité / propositions. Les `pending` ne sont jamais présentés comme des
   échecs.
 - `retag` : relance l'appel `tag` **sur la transcription déjà stockée** dans les sidecars après
-  changement de `tags.yml`, `category.yml` ou `evaluation.yml` ; ne réocérise rien, ne déplace
-  aucun document physique, puis déclenche la prise en compte par `STRUCTURE`. Remplace la
+  changement de `tags.yml` ou `evaluation.yml` ; ne réocérise rien, ne déplace aucun document
+  physique, puis déclenche la prise en compte par `STRUCTURE`. Remplace la
   `recategorize` d'origine, et la généralise à tous les espaces de noms.
 - `propose list|approve` : valeurs hors catalogue, idempotentes, avec preuve documentaire,
   jamais écrites automatiquement dans un catalogue, jamais promues en tag.

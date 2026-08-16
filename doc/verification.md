@@ -78,7 +78,7 @@ Relit les deux fichiers depuis le disque et recontrôle, indépendamment :
 | Tags `date:` | `date:prin:` unique et analysable ; toute valeur `date:` au format `AAAA-MM-JJ` et représentant une date réelle |
 | Tags `nom:` | forme `NOM_Prenom` ; `nom:prin:` en **nombre quelconque, zéro compris** — plusieurs pour un bail ou un acte de vente, aucun pour un formulaire vierge ; présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
 | Nom de fichier | gabarit `[NOM_Prenom_]Titre.ext` : partie personne présente si et seulement si le sidecar porte au moins un `nom:prin:`, et valant alors la première dans l'ordre lexicographique ; titre issu de `titre:` |
-| Tags `cat:` | chaque chemin de catégorie existe dans `category.yml`, segment par segment ; cardinalité respectée |
+| Tags `cat:` | chaque tag complet existe dans les valeurs de `.CONFIG/tags.yml` ; cardinalité respectée |
 | Règles d'évaluation | les tags du sidecar satisfont encore `.CONFIG/evaluation.yml` — un document classé sous d'anciennes règles et devenu non conforme est signalé |
 | Ordre canonique | la liste `tags:` est triée lexicographiquement et sans doublon |
 | Chemin dérivé | `destination.primary_path` == `DATE/YYYY/MM/DD` dérivé de `date:prin:`, et == chemin réel du fichier sur le disque |
@@ -236,7 +236,7 @@ phase 1 du pipeline (cœur déterministe, contrat YAML) est figée ; V3 dépend 
 - Rapport structuré `{ chemin, contrôle, attendu, obtenu }`, sorties texte et JSON.
 - **Recette :** pour chaque contrôle, une fixture saine et au moins une fixture corrompue
   (checksum modifié d'un octet, date incohérente avec le chemin, catégorie absente de
-  `category.yml`, clé inconnue, ordre des clés altéré, sidecar renommé). Test croisé : tout
+  `tags.yml`, clé inconnue, ordre des clés altéré, sidecar renommé). Test croisé : tout
   sidecar produit par `build_sidecar` en phase 1 doit passer `verify_sidecar`.
 
 ### Phase V2 — Audit `DATE` et `QUARANTAINE`
