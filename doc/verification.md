@@ -1,5 +1,7 @@
 # tripapiers — vérification
 
+> **Statut : brouillon.** Ce document décrit une proposition encore susceptible d'évoluer.
+>
 > **Composant optionnel.** `tripapiers` classe, archive et reconstruit sans lui. Ce document
 > décrit un programme d'audit **indépendant** du pipeline, qui relit le corpus depuis le disque
 > et recontrôle ses invariants. Le pipeline lui-même est décrit dans
@@ -7,34 +9,24 @@
 
 ---
 
-## 1. Statut : optionnel, et ce que cela implique
+## 1. Statut : brouillon et optionnel
 
-Le composant peut être retiré du workspace, ou simplement jamais installé. Dans ce cas :
-
-**Ce qui reste garanti** — le pipeline conserve son **contrôle en ligne** après écriture
-(cf. [`traitement-des-fichiers.md`](traitement-des-fichiers.md) §2.6) : à la fin de chaque
-transaction, il relit depuis le disque le document et le sidecar qu'il vient d'écrire,
-recalcule le sidecar et compare octet à octet, puis recontrôle le checksum du document
-déplacé. Ce contrôle fait partie de la transaction, échoue fermé et déclenche le rollback.
-Il n'est pas désactivable et ne dépend pas de ce composant. Chaque document est donc
-individuellement vérifié **au moment de son classement**.
-
-**Ce qui est perdu** — trois choses, toutes *a posteriori* :
+Le composant proposé peut être retiré du workspace, ou simplement jamais installé. Dans ce
+cas, trois capacités sont perdues, toutes *a posteriori* :
 
 1. **La détection des corruptions survenues après le classement** : édition manuelle d'un
    sidecar, altération d'un document, bit rot, lien symbolique cassé par un déplacement de
    `DATE`, sidecar dupliqué par une copie de dossier.
-2. **L'indépendance du contrôle.** Le contrôle en ligne du pipeline réutilise `build_sidecar` :
-   il détecte une écriture ratée, mais pas un bug **dans** `build_sidecar` lui-même. Le
-   composant de vérification réimplémente les contrôles depuis la configuration et le contrat
-   YAML, sans partager de code métier — c'est là que réside sa valeur, exactement comme
-   `verify_drive_document_yaml.py` était un programme distinct de
+2. **L'indépendance du contrôle.** Le composant de vérification réimplémente les contrôles
+   depuis la configuration et le contrat YAML, sans partager de code métier ; il peut donc
+   détecter un bug **dans** `build_sidecar` lui-même. C'est là que réside sa valeur, exactement
+   comme `verify_drive_document_yaml.py` était un programme distinct de
    `build_drive_document_yaml.py` dans le système d'origine.
 3. **La procédure de reprise après incident** (`doctor`, §5.4), qui donne un feu vert motivé
    avant de relancer des tâches mutatives après une panne.
 
-> **Compromis assumé.** Sans ce composant, l'invariant « échec fermé » n'est plus contrôlé que
-> par le code qui l'implémente, et la reprise après incident redevient manuelle. C'est
+> **Compromis proposé.** Sans ce composant, la conformité du corpus n'est plus auditée
+> indépendamment, et la reprise après incident redevient manuelle. C'est
 > acceptable pour un usage personnel où le corpus est petit et l'utilisateur présent ; ça ne
 > l'est plus dès que le classement tourne sans surveillance sur un timer. Recommandation :
 > livrer le composant, et le rendre optionnel plutôt qu'absent.
@@ -49,8 +41,8 @@ La règle qui gouverne toute la conception de ce composant :
 
 - Entrées autorisées : les fichiers du dépôt (`DATE/`, `STRUCTURE/`, `.CONFIG/`) et le contrat
   YAML documenté.
-- Entrées interdites : `inbox_batch.json`, `structure_state.json`, `executions.db`,
-  `llm_cache/` — l'audit ne doit pas pouvoir être trompé par un état local corrompu.
+- Entrées interdites : `inbox_batch.json`, `structure_state.json`, `executions.db` — l'audit ne
+  doit pas pouvoir être trompé par un état local corrompu.
 - Dépendances Cargo autorisées : `core` et `config` en **lecture seule** (types et parseurs).
   Interdit : `pipeline`, `store`, `llm`, `extract`, `eval` — les règles d'évaluation sont
   elles aussi réimplémentées, sinon un bug du moteur d'évaluation passerait inaperçu.
@@ -122,7 +114,7 @@ Parcours borné de `DATE/YYYY/MM/DD`, sans suivre les liens symboliques :
   attendu à partir des sidecars valides de `DATE` et de `structure.yml`, puis compare
   l'ensemble `(chemin logique → cible)` à ce qui est réellement sur le disque. Toute
   divergence — branche manquante, branche en trop, cible erronée — est signalée.
-- **Joignabilité (invariant 18)** : **tout** document de `DATE` possède au moins un chemin
+- **Joignabilité (invariant 17)** : **tout** document de `DATE` possède au moins un chemin
   logique dans `STRUCTURE`. C'est le contrôle qui attrape les échecs silencieux — un document
   correctement archivé, correctement étiqueté, et pourtant invisible dans la vue. Les causes
   sont variées et ne se ressemblent pas : un éventail sur un ensemble vide (document sans
@@ -204,14 +196,13 @@ Reprise des invariants de [`traitement-des-fichiers.md`](traitement-des-fichiers
 | 10 | un seul rapport final | — | non — propriété d'exécution |
 | 11 | `STRUCTURE` reproductible depuis `DATE` + `.CONFIG` | §4.2, contrôle fort | oui |
 | 12 | inventaires bornés, sans suivre les symlinks | — | non — propriété d'exécution |
-| 13 | verdicts LLM rejouables | hors périmètre (état local) | non |
-| 14 | escalade bornée, ≤ 3 appels LLM | `doctor` §5.8 + compteur du ledger | partiellement |
-| 15 | lignes non conformes ignorées, jamais réparées | §3 (grammaire, valeurs) — une valeur « réparée » se voit comme une valeur hors catalogue | indirectement |
-| 16 | échec d'évaluation ⇒ `QUARANTAINE` avec preuve | §4.3 | oui |
-| 17 | prompt engendré depuis `.CONFIG` | empreinte du prompt rendu, recalculée depuis `.CONFIG` et comparée à celle des rapports | oui |
-| 18 | tout document joignable dans `STRUCTURE` | §4.2, contrôle de joignabilité | oui |
+| 13 | escalade bornée, ≤ 3 appels LLM | `doctor` §5.8 + compteur du ledger | partiellement |
+| 14 | lignes non conformes ignorées, jamais réparées | §3 (grammaire, valeurs) — une valeur « réparée » se voit comme une valeur hors catalogue | indirectement |
+| 15 | échec d'évaluation ⇒ `QUARANTAINE` avec preuve | §4.3 | oui |
+| 16 | prompt engendré depuis `.CONFIG` | empreinte du prompt rendu, recalculée depuis `.CONFIG` et comparée à celle des rapports | oui |
+| 17 | tout document joignable dans `STRUCTURE` | §4.2, contrôle de joignabilité | oui |
 
-Les quatre invariants marqués « propriété d'exécution » ne sont pas auditables après coup :
+Les trois invariants marqués « propriété d'exécution » ne sont pas auditables après coup :
 ils sont garantis par la conception du pipeline et couverts par ses propres tests
 ([`traitement-des-fichiers.md`](traitement-des-fichiers.md) §14).
 

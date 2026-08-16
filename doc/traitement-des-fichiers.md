@@ -50,20 +50,9 @@ par l'architecture, pas par le modèle :
    ce qui ne passe pas l'évaluation escalade, puis part en quarantaine.
 3. **Escalade bornée.** Au plus une reprise par OCR vision, donc **au plus trois appels LLM par
    document**. Le pipeline termine toujours, sur l'un de deux états : classé ou en quarantaine.
-4. **Cache de verdicts adressé par contenu.** Chaque réponse LLM est mémorisée sous la clé
-   `sha256(octets du document) + type d'appel + sha256(prompt rendu) + id_modèle`. Le prompt
-   étant engendré déterministiquement depuis `.CONFIG` (§3), toute modification du vocabulaire
-   invalide le cache automatiquement. Une seconde exécution sur le même corpus est alors
-   **déterministe et gratuite**, et le banc de tests tourne hors ligne par rejeu du cache.
-5. **Un seul document par transaction**, verrou exclusif, journal de rollback : l'état du
+4. **Un seul document par transaction**, verrou exclusif, journal de rollback : l'état du
    dépôt après interruption est toujours l'un de deux états connus (avant / après), jamais
    un état intermédiaire.
-6. **Contrôle en ligne après écriture, non désactivable.** À la fin de chaque transaction, le
-   pipeline relit depuis le disque le document et son sidecar fraîchement écrits et recontrôle
-   checksum, chemin dérivé et conformité du sidecar. Ce contrôle fait partie de la transaction :
-   il échoue fermé et déclenche le rollback. Il est **indépendant du composant optionnel** de
-   vérification, qui apporte autre chose — un audit exhaustif du corpus, réimplémenté
-   séparément (cf. [`verification.md`](verification.md) §2).
 
 **Pourquoi des lignes de tags plutôt qu'un JSON contraint.** Les *structured outputs*
 (`output_config.format`) garantissent un JSON valide, mais en tout ou rien : une troncature
@@ -147,6 +136,10 @@ namespaces:
     prompt: >-
       Chaque date portée par le document, au format AAAA-MM-JJ. La date qui
       caractérise le document porte le rôle prin, les autres aux.
+      Si le document représente une liste ou un tableau de dates, par exemple
+      un document financier, ignore les dates des entrées de cette liste :
+      elles ne doivent produire aucun tag date:, afin d'éviter de saturer
+      l'ensemble des tags.
       Exemple : date:prin:2024-03-17
     roles: [prin, aux]
     cardinality: { min: 1, max: 12 }
@@ -162,6 +155,10 @@ namespaces:
       Il peut aussi n'en avoir AUCUNE : un formulaire vierge, une notice, un
       barème tarifaire ne concernent personne en particulier. Dans ce cas
       n'émets aucun tag nom: — n'invente pas de destinataire.
+      Si le document représente une liste de personnes, par exemple une liste
+      de participants, ignore les personnes énumérées dans cette liste : elles
+      ne doivent produire aucun tag nom:, afin d'éviter de saturer l'ensemble
+      des tags.
       Exemples : nom:prin:DUPONT_Marie / nom:prin:MARTIN_Paul / nom:aux:BERNARD_Luc
     roles: [prin, aux]
     cardinality: { min: 0, max: 8 }        # 0 : document impersonnel (§6)
@@ -260,7 +257,7 @@ Deux raccourcis déterministes, décidés sans appel LLM :
   quarantaine immédiate, aucun appel LLM.
 
 **Borne :** au plus trois appels LLM par document — `tag`, `vision`, `tag`. Le compteur est
-inscrit dans le ledger et l'invariant est testé (§10.14).
+inscrit dans le ledger et l'invariant est testé (§10.13).
 
 ---
 
@@ -272,8 +269,7 @@ Rust n'a pas de SDK Anthropic officiel : appels **HTTP bruts** via `reqwest` sur
 
 Modèle : **`claude-opus-5`** ($5 / $25 par million de tokens entrée/sortie, fenêtre 1 M,
 vision haute résolution jusqu'à 2576 px sur le grand côté). Le modèle est un paramètre de
-configuration et fait partie de la clé de cache : le changer invalide les verdicts, par
-conception.
+configuration et le modèle réellement servi est consigné avec chaque exécution.
 
 Deux types d'appel, et rien d'autre :
 
@@ -364,7 +360,7 @@ coût par document.
   compte comme un échec d'évaluation (donc escalade, puis quarantaine) ; un refus sur `vision`
   mène directement en quarantaine. Activer le repli serveur (`fallbacks: "default"`, en-tête
   beta `server-side-fallback-2026-07-01`) et **journaliser le modèle réellement servi**
-  (`response.model`) dans l'entrée de cache — un repli change le producteur du verdict.
+  (`response.model`) dans le ledger — un repli change le producteur du verdict.
 - **`max_tokens`** : sortie tronquée. Sur `tag`, les lignes complètes reçues restent
   exploitables et l'évaluation tranche — c'est tout l'intérêt du format ligne. Sur `vision`,
   une transcription tronquée est un échec.
@@ -563,7 +559,7 @@ tripapiers/
 │   ├── core/        # grammaire des tags, contrat YAML, checksum, dérivation de chemin
 │   ├── config/      # tags.yml, category.yml, evaluation.yml, structure.yml + rendu du prompt
 │   ├── extract/     # OCR locale : pdftotext, pdftoppm, tesseract, métriques de qualité
-│   ├── llm/         # client Claude (HTTP), appels tag et vision, analyseur de lignes, cache
+│   ├── llm/         # client Claude (HTTP), appels tag et vision, analyseur de lignes
 │   ├── eval/        # moteur d'évaluation des tags, verdicts
 │   ├── store/       # opérations fichiers atomiques, journal, rollback, .TRASH, QUARANTAINE
 │   ├── pipeline/    # machine à états de l'escalade, transactions, registre, verrou, ledger
@@ -609,7 +605,6 @@ Racine du dépôt documentaire, configurable (`--root`, `TRIPAPIERS_ROOT`) :
 inbox_batch.json              # registre durable du lot (pending/classified/quarantined)
 structure_state.json          # état de reconstruction incrémentale
 tag_proposals.json            # valeurs hors catalogue, idempotentes
-llm_cache/                    # verdicts LLM adressés par contenu
 executions.db                 # ledger SQLite des exécutions
 tripapiers.lock               # verrou d'exclusion unique (flock)
 journal/                      # journaux de transaction pour rollback
@@ -750,7 +745,7 @@ trier avant les noms propres et le distingue visuellement d'une personne réelle
 racine, d'autres sous une personne — ce qui casse la lisibilité et complique la comparaison entre
 reconstruction complète et incrémentale.
 
-Quelle que soit l'option retenue, la garantie doit être vérifiable, d'où l'invariant 18 (§10) :
+Quelle que soit l'option retenue, la garantie doit être vérifiable, d'où l'invariant 17 (§10) :
 **tout document classé est joignable par au moins un chemin logique**. C'est un contrôle
 générique, qui attrape cette classe de bogue au-delà du seul cas `nom:` — un filtre trop étroit,
 une catégorie absente de `structure.yml`, une branche mal conditionnée produisent le même
@@ -812,18 +807,17 @@ Contraintes :
    YAML et ne touche pas au système de fichiers ;
 6. aucun dossier `CATEGORY` n'est créé ;
 7. aucune commande mutative concurrente (verrou unique) ;
-8. une erreur de verrou, de journal, de ledger ou de contrôle en ligne provoque un échec fermé ;
+8. une erreur de verrou, de journal ou de ledger provoque un échec fermé ;
 9. les suppressions passent par `.TRASH/`, jamais `unlink` direct ;
 10. aucun rapport intermédiaire pendant le traitement d'un lot ; un seul rapport final ;
 11. `STRUCTURE` est intégralement reproductible depuis `DATE` + `.CONFIG` ;
 12. les inventaires sont bornés au parent exact, sans suivre les liens symboliques ;
-13. tout verdict LLM est mémorisé et rejouable hors ligne ;
-14. **l'escalade est bornée** : au plus une reprise vision, au plus trois appels LLM par document ;
-15. **aucune ligne non conforme n'est réparée** : elle est ignorée, comptée et journalisée ;
-16. **un échec d'évaluation déplace le document en `QUARANTAINE`**, avec son dossier de preuve ;
+13. **l'escalade est bornée** : au plus une reprise vision, au plus trois appels LLM par document ;
+14. **aucune ligne non conforme n'est réparée** : elle est ignorée, comptée et journalisée ;
+15. **un échec d'évaluation déplace le document en `QUARANTAINE`**, avec son dossier de preuve ;
      une panne d'infrastructure, elle, le laisse `pending` ;
-17. **le prompt est engendré depuis `.CONFIG`**, jamais écrit en dur dans le code Rust ;
-18. **tout document classé est joignable par au moins un chemin logique** dans `STRUCTURE` — un
+16. **le prompt est engendré depuis `.CONFIG`**, jamais écrit en dur dans le code Rust ;
+17. **tout document classé est joignable par au moins un chemin logique** dans `STRUCTURE` — un
      document correctement archivé mais invisible dans la vue est un échec silencieux, donc le
      plus dangereux.
 
@@ -921,12 +915,11 @@ phase 1.
   journal de rollback.
 - `QUARANTAINE` : mise en quarantaine avec dossier de preuve (§9), `requeue`, `quarantaine list`.
 - `crates/pipeline` : verrou `flock`, ledger SQLite, registre de lot, machine à états de
-  l'escalade (§4) avec son compteur d'appels, contrôle en ligne après écriture, rapport final
-  unique.
+  l'escalade (§4) avec son compteur d'appels et rapport final unique.
 - Analyse injectée (trait `Tagger`) : **le pipeline complet fonctionne sans LLM**.
 - **Recette :** injection de panne à chaque étape ⇒ aucun état intermédiaire observable ; test
-  de concurrence ; « aucun rapport avant état terminal du lot » ; « sidecar corrompu entre
-  écriture et relecture ⇒ transaction annulée » ; **« l'escalade ne se produit qu'une fois »** ;
+  de concurrence ; « aucun rapport avant état terminal du lot » ;
+  **« l'escalade ne se produit qu'une fois »** ;
   aller-retour `quarantaine` → `requeue` → classement réussi après correction des seuils.
 
 ### Phase 3 — OCR locale
@@ -939,12 +932,12 @@ phase 1.
   quarantaine immédiate), non-régression sur les métriques, aucun appel réseau.
 
 ### Phase 4 — Adaptateur LLM
-- Client `reqwest` (rustls), appels `tag` et `vision` (§5), cache adressé par contenu, rejeu.
+- Client `reqwest` (rustls), appels `tag` et `vision` (§5).
 - Gestion de `stop_reason`, chaîne d'erreurs HTTP, backoff, repli serveur, comptabilité de coût
   et du nombre d'appels par document dans le ledger.
 - `--batch`, `count-tokens` préflight, `--no-llm`.
 - **Recette :** serveur HTTP simulé couvrant refus, 429, 5xx, réponse vide, réponse tronquée en
-  milieu de ligne, réponse 100 % non conforme ; rejeu du cache ; **un** test `#[ignore]` frappant
+  milieu de ligne, réponse 100 % non conforme ; **un** test `#[ignore]` frappant
   la vraie API ; contrôle que la distinction « panne ⇒ `pending` » / « évaluation ⇒
   `QUARANTAINE` » est respectée dans chaque cas.
 
@@ -963,7 +956,7 @@ phase 1.
   plusieurs `nom:prin:`** — un lien sous chaque partie, tous vers la même cible, ajoutés et
   retirés ensemble lors d'un incrément qui fait disparaître l'une des parties des tags ;
   **document sans `nom:prin:`** — l'éventail vide produit la branche substitut et le document
-  reste joignable (invariant 18), en reconstruction complète comme en incrémentale.
+  reste joignable (invariant 17), en reconstruction complète comme en incrémentale.
 
 ### Phase 6 — Rapport, réétiquetage, propositions
 - `report` : rapport final unique distinguant classés / mis en quarantaine avec la règle en
@@ -982,7 +975,7 @@ phase 1.
 - `import` : adoption d'une arborescence `DATE` existante en `schema_version: 1`, avec migration
   des tags plats vers la forme hiérarchique si le point §11.1 est tranché en ce sens. Aucun
   appel LLM.
-- Journal des versions de prompt/catalogue/seuils et procédure d'invalidation du cache.
+- Journal des versions de prompt, catalogue et seuils.
 - Deux profils de distribution : avec et sans le composant de vérification
   ([`verification.md`](verification.md) §7).
 
@@ -1014,7 +1007,7 @@ vérification (sa propre recette est en [`verification.md`](verification.md) §9
 
 1. **Sans réseau** — `cargo test --workspace --exclude tripapiers-verify` : configuration, rendu
    du prompt, grammaire, analyseur de tags, évaluation, transactions, quarantaine, OCR locale,
-   adaptateur LLM (serveur simulé + rejeu du cache). Porte de CI du composant obligatoire.
+   adaptateur LLM avec serveur simulé. Porte de CI du composant obligatoire.
 2. **Corpus synthétique** — `tripapiers --root <tmp> classify --all --no-llm`, puis avec un
    `Tagger` injecté : vérifier `DATE`, sidecars, registre, rapport unique.
 3. **Chemin d'escalade** — un `Tagger` injecté qui échoue à la passe 1 et réussit à la passe 2 :
@@ -1034,7 +1027,5 @@ vérification (sa propre recette est en [`verification.md`](verification.md) §9
 9. **API réelle** — `cargo test -- --ignored` sur un mini-corpus de 5 documents : `stop_reason`,
    `usage.cache_read_input_tokens` non nul dès le second document, conformité des lignes, coût et
    nombre d'appels enregistrés.
-10. **Reproductibilité** — deux exécutions complètes sur le même corpus produisent des sidecars
-    **identiques octet à octet** (la seconde servie par le cache).
-11. **Build sans le composant optionnel** — `cargo build -p tripapiers-cli` après retrait de
-    `crates/verify` du workspace : doit compiler et passer les tests 1 à 10.
+10. **Build sans le composant optionnel** — `cargo build -p tripapiers-cli` après retrait de
+    `crates/verify` du workspace : doit compiler et passer les tests 1 à 9.

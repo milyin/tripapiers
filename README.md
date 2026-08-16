@@ -15,8 +15,7 @@ Trois principes :
   texte — il rend une liste de tags, un par ligne, et le code Rust ignore toute ligne non
   conforme — et **ré-océriser** un document quand l'OCR locale n'a pas suffi. Les tags reçus
   passent ensuite une évaluation formelle et configurable ; un document qui échoue part en
-  `QUARANTAINE` avec son dossier de preuve, jamais dans l'archive. Les réponses sont mémorisées
-  par empreinte de contenu, pour que les exécutions suivantes soient reproductibles.
+  `QUARANTAINE` avec son dossier de preuve, jamais dans l'archive.
 
 ## État
 
@@ -26,12 +25,11 @@ découpée en deux documents, correspondant aux deux composants du projet :
 | Document | Composant |
 |---|---|
 | [`doc/traitement-des-fichiers.md`](doc/traitement-des-fichiers.md) | Le pipeline de classement `INBOX → DATE → STRUCTURE` — **obligatoire** |
-| [`doc/verification.md`](doc/verification.md) | L'audit indépendant du corpus — **optionnel** |
+| [`doc/verification.md`](doc/verification.md) | L'audit indépendant du corpus — **brouillon, optionnel** |
 
-Le pipeline classe et archive sans le second composant : il conserve un contrôle en ligne,
-non désactivable, qui relit et revérifie chaque document au moment de son écriture. Le
-composant de vérification apporte autre chose — un audit *a posteriori* de tout le corpus,
-réimplémenté indépendamment du code qui a produit les fichiers.
+Le pipeline classe et archive sans le second composant. Le document de vérification, encore à
+l'état de brouillon, propose un audit *a posteriori* de tout le corpus, réimplémenté
+indépendamment du code qui a produit les fichiers.
 
 ## Prérequis prévus
 
