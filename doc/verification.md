@@ -1,288 +1,258 @@
 # tripapiers — vérification
 
-> **Statut : brouillon.** Ce document décrit une proposition encore susceptible d'évoluer.
->
-> **Composant optionnel.** `tripapiers` classe, archive et reconstruit sans lui. Ce document
-> décrit un programme d'audit **indépendant** du pipeline, qui relit le corpus depuis le disque
-> et recontrôle ses invariants. Le pipeline lui-même est décrit dans
-> [`traitement-des-fichiers.md`](traitement-des-fichiers.md).
+> **Statut : brouillon.** Ce document décrit un composant indépendant et optionnel, susceptible
+> d'évoluer après la mise en œuvre du pipeline principal.
 
 ---
 
-## 1. Statut : brouillon et optionnel
+## 1. Rôle
 
-Le composant proposé peut être retiré du workspace, ou simplement jamais installé. Dans ce
-cas, trois capacités sont perdues, toutes *a posteriori* :
+Le composant de vérification relit les autorités visibles sur le disque :
 
-1. **La détection des corruptions survenues après le classement** : édition manuelle d'un
-   sidecar, altération d'un document, bit rot, lien symbolique cassé par un déplacement de
-   `DATE`, sidecar dupliqué par une copie de dossier.
-2. **L'indépendance du contrôle.** Le composant de vérification réimplémente les contrôles
-   depuis la configuration et le contrat YAML, sans partager de code métier ; il peut donc
-   détecter un bug **dans** `build_sidecar` lui-même. C'est là que réside sa valeur, exactement
-   comme `verify_drive_document_yaml.py` était un programme distinct de
-   `build_drive_document_yaml.py` dans le système d'origine.
-3. **La procédure de reprise après incident** (`doctor`, §5.4), qui donne un feu vert motivé
-   avant de relancer des tâches mutatives après une panne.
+- `tripapiers.toml` et `.CONFIG` ;
+- les originaux sous `DOC/YYYY/MM/DD` ;
+- les artefacts OCR sous `OCR/YYYY/MM/DD` ;
+- les artefacts d'étiquetage sous `TAG/YYYY/MM/DD` ;
+- les ensembles en échec sous `QUARANTINE/YYYY/MM/DD`.
 
-> **Compromis proposé.** Sans ce composant, la conformité du corpus n'est plus auditée
-> indépendamment, et la reprise après incident redevient manuelle. C'est
-> acceptable pour un usage personnel où le corpus est petit et l'utilisateur présent ; ça ne
-> l'est plus dès que le classement tourne sans surveillance sur un timer. Recommandation :
-> livrer le composant, et le rendre optionnel plutôt qu'absent.
+Il ne crée, ne déplace et ne supprime aucun fichier. Il ne dépend ni de l'état interne du
+pipeline, ni du ledger, ni des journaux de transaction pour conclure qu'un triplet est valide.
+
+Le pipeline fonctionne sans ce composant. Sans lui, les erreurs survenues après le rangement —
+modification manuelle, bit rot, suppression d'un membre ou copie dans une mauvaise date — ne
+sont simplement pas auditées de façon indépendante.
 
 ---
 
-## 2. Principe : indépendance, pas réutilisation
+## 2. Principe d'indépendance
 
-La règle qui gouverne toute la conception de ce composant :
+La vérification réimplémente les contrôles à partir des contrats documentés ; elle n'appelle ni
+les constructeurs YAML du pipeline, ni ses fonctions de résolution de triplets.
 
-**Il ne partage aucun code métier avec le pipeline, et ne lit aucun de ses états internes.**
+Entrées autorisées :
 
-- Entrées autorisées : les fichiers du dépôt (`DATE/`, `STRUCTURE/`, `.CONFIG/`) et le contrat
-  YAML documenté.
-- Entrées interdites : `inbox_batch.json`, `structure_state.json`, `executions.db` — l'audit ne
-  doit pas pouvoir être trompé par un état local corrompu.
-- Dépendances Cargo autorisées : `core` et `config` en **lecture seule** (types et parseurs).
-  Interdit : `pipeline`, `store`, `llm`, `extract`, `eval` — les règles d'évaluation sont
-  elles aussi réimplémentées, sinon un bug du moteur d'évaluation passerait inaperçu.
-- Les contrôles sont **réimplémentés** à partir du contrat, pas obtenus en appelant
-  `build_sidecar`. Une divergence entre les deux implémentations est précisément le signal
-  recherché.
+- fichiers sous les cinq racines configurées ;
+- `tripapiers.toml`, `tags.yml` et `evaluation.yml` ;
+- schémas et types de lecture du crate `core`.
 
-En conséquence, `pipeline` ne dépend pas de `verify`, et retirer `crates/verify` du workspace
-doit laisser `cargo build -p tripapiers-cli` intact
-([`traitement-des-fichiers.md`](traitement-des-fichiers.md) §8.1).
+Entrées interdites pour l'audit normal :
+
+- `executions.db` ;
+- `journal/` ;
+- réponses brutes ou caches internes d'un fournisseur ;
+- fonctions mutatives de `store` et `pipeline`.
+
+Une divergence entre le producteur et l'auditeur est le signal recherché, pas une erreur à
+masquer en partageant davantage de code.
 
 ---
 
-## 3. `verify_sidecar` — contrôle unitaire d'un document
+## 3. Résolution de la configuration
 
-```rust
-fn verify_sidecar(
-    document_path: &Path,
-    sidecar_path: &Path,
-    config: &Config,
-) -> SidecarReport
-```
+L'auditeur applique la même priorité déclarative que la CLI : arguments explicites, fichier
+TOML, valeurs par défaut. Il réimplémente cependant les validations :
 
-Relit les deux fichiers depuis le disque et recontrôle, indépendamment :
+- racines non vides et distinctes ;
+- absence de chevauchement entre `INBOX`, `QUARANTINE`, `DOC`, `OCR` et `TAG` ;
+- aucun lien symbolique utilisé comme racine gérée ;
+- chemins relatifs résolus depuis le fichier TOML, ou depuis `--root` lorsqu'il est fourni ;
+- existence et validité des fichiers de `.CONFIG`.
+
+Une configuration ambiguë interrompt l'audit avant tout parcours.
+
+---
+
+## 4. Contrôles unitaires
+
+### 4.1 Original sous `DOC`
+
+Pour `DOC/YYYY/MM/DD/<filename>` :
+
+- `YYYY/MM/DD` est une date civile valide ;
+- le fichier est ordinaire, jamais un lien symbolique ;
+- `<filename>` ne porte pas un suffixe réservé `.ocr.yml` ou `.tag.yml` ;
+- son SHA-256 est calculable et correspond aux deux artefacts associés.
+
+La date du chemin est comparée à `source.added_date` dans les deux YAML. Aucun
+tag `date:` et aucune métadonnée du fichier ne sont utilisés pour dériver ce chemin.
+
+### 4.2 Artefact OCR
+
+Pour `OCR/YYYY/MM/DD/<filename>.ocr.yml` :
 
 | Contrôle | Détail |
 |---|---|
-| Identifiant stable de source | `source.sha256` correspond bien au SHA-256 des octets du document |
-| Checksum | `checksum: "sha256:…"` recalculé sur les octets réels, pas sur une copie en mémoire |
-| Grammaire des tags | chaque entrée de `tags:` respecte la grammaire (au moins deux segments, bornes dures) et son espace de noms est déclaré dans `.CONFIG/tags.yml` |
-| Rôles | tout tag d'un espace à rôles porte un rôle déclaré (`prin`/`aux`), et les cardinalités par rôle sont respectées |
-| Valeurs | chaque valeur passe le `value_pattern` de son espace, ou appartient à son `catalogue:` quand il en déclare un |
-| Tags `date:` | `date:prin:` unique et analysable ; toute valeur `date:` au format `AAAA-MM-JJ` et représentant une date réelle |
-| Tags `nom:` | forme `NOM_Prenom` ; `nom:prin:` en **nombre quelconque, zéro compris** — plusieurs pour un bail ou un acte de vente, aucun pour un formulaire vierge ; présence dans `.CONFIG/persons.yml` si ce catalogue est adopté |
-| Nom de fichier | gabarit `[NOM_Prenom_]Titre.ext` : partie personne présente si et seulement si le sidecar porte au moins un `nom:prin:`, et valant alors la première dans l'ordre lexicographique ; titre issu de `titre:` |
-| Tags `cat:` | chaque tag complet existe dans les valeurs de `.CONFIG/tags.yml` ; cardinalité respectée |
-| Règles d'évaluation | les tags du sidecar satisfont encore `.CONFIG/evaluation.yml` — un document classé sous d'anciennes règles et devenu non conforme est signalé |
-| Ordre canonique | la liste `tags:` est triée lexicographiquement et sans doublon |
-| Chemin dérivé | `destination.primary_path` == `DATE/YYYY/MM/DD` dérivé de `date:prin:`, et == chemin réel du fichier sur le disque |
-| Tag `confiance:` | présent, unique, entier dans 0..100 ; ≥ `confidence.minimum` de `.CONFIG/evaluation.yml` |
-| Bloc `ocr` | `provenance` ∈ {`local`, `vision`}, `engine` non vide, `escalated` cohérent avec `provenance`, `qualite_modele` égal au tag `confiance:`, `qualite_locale` dans 0..100 |
-| Conformité du sidecar | `schema_version` connue, clés attendues présentes, aucune clé inconnue, sérialisation canonique (ordre des clés, LF, absence d'ancres) |
-| Adjacence | le sidecar est bien `<nom-du-document>.yml` dans le même dossier |
+| Schéma | `schema_version` connue, clés attendues uniquement |
+| Source | `source.filename`, `source.sha256` et `source.added_date` présents |
+| Emplacement | date et nom cohérents avec le document sous `DOC` |
+| Moteur | `ocr.engine.kind` dans `local\|model`, nom non vide, version si disponible |
+| Langues | liste non vide de codes configurés |
+| Confiance | entier `0..100`, `source: local`, version de formule connue |
+| Repli vision | cohérent avec `engine.kind` |
+| Texte | chaîne UTF-8 présente, scalaire littéral dans la forme canonique |
 
-Chaque échec produit une entrée `{ chemin, contrôle, attendu, obtenu }` — jamais une simple
-valeur booléenne : le rapport doit être actionnable.
+L'auditeur vérifie explicitement que la confiance vient du calcul local. Il n'attend et
+n'accepte aucun tag `confiance:` dans l'artefact TAG.
+
+### 4.3 Artefact TAG
+
+Pour `TAG/YYYY/MM/DD/<filename>.tag.yml` :
+
+| Contrôle | Détail |
+|---|---|
+| Source | nom, SHA-256 et `added_date` identiques à l'original et à l'OCR |
+| Lien OCR | `ocr.sha256` correspond aux octets du `.ocr.yml` associé |
+| Modèle | identifiant non vide et horodatage analysable |
+| Prompt | empreinte recalculée depuis `tags.yml` lorsqu'il s'agit de la version courante |
+| Grammaire | segments, rôles, casse et bornes dures respectés |
+| Valeurs | expressions régulières et valeurs fermées de `tags.yml` respectées |
+| Cardinalités | règles de `tags.yml` et `evaluation.yml` satisfaites |
+| Ordre | tags triés lexicographiquement et sans doublon |
+| Confiance | aucun namespace `confiance:` présent |
+
+Un artefact classé avec une ancienne empreinte de prompt reste historiquement lisible. Il est
+signalé comme `stale_prompt`, pas comme corrompu, sauf si ses tags enfreignent le contrat actuel.
 
 ---
 
-## 4. Audit du corpus
+## 5. Audit global
 
-### 4.1 Audit `DATE`
+### 5.1 Correspondance `DOC` / `OCR` / `TAG`
 
-Parcours borné de `DATE/YYYY/MM/DD`, sans suivre les liens symboliques :
+L'auditeur construit trois ensembles de clés `(date, filename)` sans suivre les liens
+symboliques, puis exige leur égalité exacte.
 
-- `verify_sidecar` sur chaque paire document/sidecar ;
-- **unicité** : aucun document sans sidecar, aucun sidecar orphelin, aucun `source.sha256` en
-  double dans tout le corpus (détection de doublon classé deux fois) ;
-- cohérence de l'arborescence : aucun fichier hors du gabarit `YYYY/MM/DD`, aucun répertoire
-  de date impossible (`2024/13/…`, `2024/02/30`).
+Il signale :
 
-### 4.2 Intégrité `STRUCTURE`
+- document sans OCR ou sans TAG ;
+- YAML orphelin ;
+- membre placé sous une autre date ;
+- nom de base divergent ;
+- SHA-256 divergent ;
+- doublon de contenu sous plusieurs clés, comme avertissement distinct.
 
-- **Aucun fichier physique ni sidecar** dans `STRUCTURE` : uniquement des dossiers et des
-  liens symboliques (invariant 2).
-- **Aucun lien pendant** : chaque symlink pointe vers un fichier existant de `DATE`.
-- **Aucune cible hors `DATE`** : après résolution, chaque cible reste sous `DATE/`.
-- **Reproductibilité (invariant 11)** : le contrôle fort. Le composant recalcule le plan
-  attendu à partir des sidecars valides de `DATE` et de `structure.yml`, puis compare
-  l'ensemble `(chemin logique → cible)` à ce qui est réellement sur le disque. Toute
-  divergence — branche manquante, branche en trop, cible erronée — est signalée.
-- **Joignabilité (invariant 17)** : **tout** document de `DATE` possède au moins un chemin
-  logique dans `STRUCTURE`. C'est le contrôle qui attrape les échecs silencieux — un document
-  correctement archivé, correctement étiqueté, et pourtant invisible dans la vue. Les causes
-  sont variées et ne se ressemblent pas : un éventail sur un ensemble vide (document sans
-  `nom:prin:`), une catégorie absente de `structure.yml`, un filtre trop étroit, une branche mal
-  conditionnée. Le rapport nomme le document *et* la raison pour laquelle aucune branche ne l'a
-  retenu, sans quoi le diagnostic est impossible.
-- **Aucun dossier `CATEGORY`** à la racine (invariant 6).
+### 5.2 Audit d'`INBOX`
 
-### 4.3 Audit `QUARANTAINE`
+`INBOX` ne contient que des fichiers ordinaires directement sous sa racine. Chaque `.ocr.yml`
+ou `.tag.yml` doit correspondre à un original du même nom. L'auditeur accepte donc un original
+seul, un original avec OCR, ou un original avec OCR et TAG ; il signale tout YAML orphelin, TAG
+sans OCR, sous-dossier, lien symbolique, temporaire abandonné ou fichier déjà présent à
+l'identique sous `DOC`.
 
-La quarantaine est une zone de stockage comme une autre : elle a ses propres invariants, et un
-document qui s'y perd silencieusement est une perte de données.
+Un fichier ancien dans `INBOX` n'est pas une corruption. Il produit un avertissement
+`pending_too_long` avec un seuil configurable pour attirer l'attention sur une panne récurrente.
 
-- **Complétude du dossier de preuve** : chaque entrée porte un `rapport.yml` lisible, la
-  transcription locale, et la transcription vision si `rapport.yml` indique qu'une escalade a eu
-  lieu. Les sorties brutes du modèle sont présentes pour chaque passe déclarée.
-- **Intégrité du document** : le SHA-256 du fichier mis en quarantaine correspond à celui
-  enregistré dans `rapport.yml`. Une entrée de quarantaine n'est pas un brouillon : le document
-  doit y être intact et récupérable.
-- **Séparation stricte d'avec `DATE`** : aucune entrée ne contient de sidecar conforme au
-  contrat canonique. `rapport.yml` porte un `schema_version` distinct, et le contrôle vérifie
-  qu'aucun fichier de la quarantaine ne passerait `verify_sidecar` — sans quoi un outil tiers
-  pourrait prendre une entrée en échec pour un document classé.
-- **Absence de doublon fantôme** : aucun `source.sha256` présent à la fois dans `QUARANTAINE` et
-  dans `DATE`. Ce cas signale un `requeue` mal terminé.
-- **Ancienneté** : les entrées plus vieilles qu'un seuil configurable sont signalées — non comme
-  une erreur, mais comme un rappel. Une quarantaine qu'on ne vide jamais est une corbeille.
+### 5.3 Audit de `QUARANTINE`
 
-### 4.4 Modes de sortie
+Chaque entrée suit :
 
-```
-tripapiers verify [date|structure|quarantaine|all] [--format text|json] [--fail-fast]
+```text
+QUARANTINE/YYYY/MM/DD/<filename>--<short-sha>/
 ```
 
-Code de sortie 0 si tout passe, non-0 sinon. `--format json` produit un rapport machine,
-destiné à une unité systemd ou à une tâche planifiée.
+Elle contient l'original, les artefacts YAML qui avaient pu être produits et `report.yml`.
+L'auditeur vérifie :
+
+- cohérence des noms, date et empreintes ;
+- présence de la phase et d'au moins une raison typée ;
+- absence simultanée du même document dans un triplet valide ;
+- absence de fichier temporaire ou inconnu ;
+- cohérence des chemins cibles consignés dans le rapport avec la configuration actuelle.
+
+### 5.4 Absence de vues dérivées
+
+Le composant n'attend aucune racine de structure, aucun index et aucun raccourci. Dans les
+racines gérées, tout lien symbolique est une erreur. L'audit ne construit donc aucun plan de vue
+et ne possède aucun mode de reconstruction.
 
 ---
 
-## 5. Reprise après incident (`doctor`)
+## 6. Interface envisagée
 
-Préflight à exécuter avant de relancer des tâches mutatives après une panne. Contrairement au
-reste du composant, `doctor` **est** autorisé à lire les états locaux du pipeline : son travail
-consiste justement à juger leur cohérence.
+```text
+tripapiers verify [documents|ocr|tags|inbox|quarantine|all]
+  [--format text|json]
+  [--fail-fast]
+  [--config <path>]
+  [--root <path>]
+  [--inbox-dir <path>]
+  [--quarantine-dir <path>]
+  [--documents-dir <path>]
+  [--ocr-dir <path>]
+  [--tags-dir <path>]
+```
 
-Contrôles :
+Les commandes, modes, arguments, clés JSON et codes de contrôle sont en anglais. Les messages
+du format `text` sont en français.
 
-1. absence d'exécution vivante `claimed` ou `running` dans le ledger ;
-2. cohérence du ledger (pas de transaction ouverte sans clôture) ;
-3. aucun journal de transaction non clôturé dans `journal/` ;
-4. intégrité de `DATE` (§4.1) ;
-5. unicité des sidecars des documents récemment ajoutés ;
-6. conformité de `STRUCTURE` (§4.2), ou proposition d'un plan de reconstruction sûr ;
-7. cohérence du registre de lot avec le contenu réel de `INBOX`, `DATE` et `QUARANTAINE` ;
-8. aucune escalade laissée en cours : un document dont le ledger porte un appel `vision` sans
-   passe `tag` consécutive est un travail interrompu, pas un échec d'évaluation — il doit
-   repartir en `pending`, pas en quarantaine.
+Code de sortie :
 
-Si l'une de ces conditions échoue, `doctor` sort non-0 avec un incident explicite et
-**recommande** de laisser les tâches mutatives en pause. Il ne modifie rien lui-même.
+- `0` : aucun défaut ;
+- `1` : défaut de corpus ;
+- `2` : configuration ou invocation invalide ;
+- `3` : audit incomplet à cause d'une panne d'infrastructure.
 
----
-
-## 6. Correspondance invariant → contrôle
-
-Reprise des invariants de [`traitement-des-fichiers.md`](traitement-des-fichiers.md) §10.
-
-| # | Invariant | Contrôlé par | Contrôlable *a posteriori* ? |
-|---|---|---|---|
-| 1 | un document par transaction | ledger via `doctor` §5.2 | partiellement |
-| 2 | document physique dans `DATE`, jamais `STRUCTURE` | §4.2 | oui |
-| 3 | sidecar adjacent, valide, checksummé | §3 + §4.1 | oui |
-| 4 | `.CONFIG` seule autorité, jamais écrite | empreinte des fichiers de config dans le rapport | oui |
-| 5 | le LLM ne sérialise pas le YAML | §3 (sérialisation canonique) | indirectement |
-| 6 | aucun dossier `CATEGORY` | §4.2 | oui |
-| 7 | pas de mutation concurrente | `doctor` §5.1 | non — propriété d'exécution |
-| 8 | échec fermé | `doctor` §5.2–5.3 | partiellement |
-| 9 | suppressions via `.TRASH/` | inventaire de `.TRASH/` | partiellement |
-| 10 | un seul rapport final | — | non — propriété d'exécution |
-| 11 | `STRUCTURE` reproductible depuis `DATE` + `.CONFIG` | §4.2, contrôle fort | oui |
-| 12 | inventaires bornés, sans suivre les symlinks | — | non — propriété d'exécution |
-| 13 | escalade bornée, ≤ 3 appels LLM | `doctor` §5.8 + compteur du ledger | partiellement |
-| 14 | lignes non conformes ignorées, jamais réparées | §3 (grammaire, valeurs) — une valeur « réparée » se voit comme une valeur hors catalogue | indirectement |
-| 15 | échec d'évaluation ⇒ `QUARANTAINE` avec preuve | §4.3 | oui |
-| 16 | prompt engendré depuis `.CONFIG` | empreinte du prompt rendu, recalculée depuis `.CONFIG` et comparée à celle des rapports | oui |
-| 17 | tout document joignable dans `STRUCTURE` | §4.2, contrôle de joignabilité | oui |
-
-Les trois invariants marqués « propriété d'exécution » ne sont pas auditables après coup :
-ils sont garantis par la conception du pipeline et couverts par ses propres tests
-([`traitement-des-fichiers.md`](traitement-des-fichiers.md) §14).
+Le JSON est versionné, trié par `(date, filename, check)` et stable pour permettre sa comparaison
+en CI.
 
 ---
 
-## 7. Distribution
+## 7. Correspondance avec les invariants du pipeline
 
-Deux profils, à choisir à la compilation :
-
-| Profil | Contenu | Usage |
+| # | Invariant | Contrôle |
 |---|---|---|
-| **minimal** | `tripapiers` seul | poste personnel, corpus surveillé |
-| **complet** | `tripapiers` + `tripapiers-verify` | classement automatisé sur timer, corpus important |
+| 1 | chemin fondé sur la date d'ajout | comparaison avec `source.added_date` |
+| 2 | triplet complet sous une même date | égalité des trois inventaires |
+| 3 | original préservé | empreintes croisées |
+| 4 | OCR lié au document | `OCR.source.sha256` |
+| 5 | TAG lié à l'OCR | `TAG.ocr.sha256` |
+| 6 | confiance locale uniquement | contrat OCR + absence de `confiance:` |
+| 7 | date documentaire sans effet sur le chemin | contrôle de dérivation |
+| 8 | aucune vue par lien | refus des liens symboliques |
+| 9 | priorité des chemins | résolution indépendante de la configuration |
+| 10 | lignes invalides non réparées | indirect, via grammaire et diagnostics |
+| 11 | quarantaine complète | audit de l'entrée et du rapport |
+| 12 | panne laissant le document dans `INBOX` | partiellement observable |
+| 13 | suppression tout ou rien | absence de triplet partiel |
+| 14 | catégories dans `tags.yml` | validation des valeurs fermées |
+| 15 | interface configurable en anglais | tests CLI et schéma TOML |
 
-Mise en œuvre : `crates/verify` produit un binaire distinct `tripapiers-verify`, et une
-*feature* optionnelle `verify` du crate `cli` ajoute les sous-commandes `verify` et `doctor`
-comme façade. La feature est **activée par défaut** ; `--no-default-features` produit le profil
-minimal. Le binaire distinct reste utilisable seul, sans le CLI principal — c'est ce qui rend
-l'audit exécutable depuis une autre machine ou sur une sauvegarde montée en lecture seule.
-
----
-
-## 8. Phases de développement
-
-Numérotation séparée de celle du pipeline. Les phases V1 et V2 peuvent démarrer dès que la
-phase 1 du pipeline (cœur déterministe, contrat YAML) est figée ; V3 dépend de la phase 5
-(reconstruction `STRUCTURE`).
-
-### Phase V1 — `verify_sidecar` indépendant
-- Réimplémentation des contrôles du §3 depuis le contrat YAML, sans appeler `build_sidecar`.
-- Rapport structuré `{ chemin, contrôle, attendu, obtenu }`, sorties texte et JSON.
-- **Recette :** pour chaque contrôle, une fixture saine et au moins une fixture corrompue
-  (checksum modifié d'un octet, date incohérente avec le chemin, catégorie absente de
-  `tags.yml`, clé inconnue, ordre des clés altéré, sidecar renommé). Test croisé : tout
-  sidecar produit par `build_sidecar` en phase 1 doit passer `verify_sidecar`.
-
-### Phase V2 — Audit `DATE` et `QUARANTAINE`
-- Parcours borné, unicité, détection de doublons par `source.sha256`, cohérence de
-  l'arborescence de dates.
-- Audit `QUARANTAINE` (§4.3) : complétude du dossier de preuve, intégrité du document, séparation
-  stricte d'avec `DATE`, doublons fantômes, ancienneté.
-- **Recette :** corpus synthétique de 500 documents avec injections — sidecar orphelin,
-  document sans sidecar, doublon exact, `2024/02/30`. Pour la quarantaine : `rapport.yml`
-  manquant ou illisible, transcription vision absente alors que `rapport.yml` déclare une
-  escalade, document altéré après mise en quarantaine, sidecar canonique glissé dans une entrée,
-  document présent à la fois en `DATE` et en `QUARANTAINE`. Chaque injection doit être détectée et
-  attribuée au bon chemin.
-
-### Phase V3 — Intégrité `STRUCTURE` et `doctor`
-- Contrôles du §4.2, dont la recomparaison du plan attendu contre le disque.
-- `doctor` (§5) avec lecture des états locaux et code de sortie motivé.
-- **Recette :** injections — lien pendant, cible hors `DATE`, fichier physique déposé dans
-  `STRUCTURE`, branche supprimée à la main, `structure.yml` modifié sans reconstruction,
-  **document injoignable** : un sidecar sans `nom:prin:` classé alors que `structure.yml` fait
-  passer tous ses chemins par un éventail `nom:` — le contrôle de joignabilité doit le nommer
-  et dire quelle branche a échoué à le retenir.
-  Pour `doctor` : ledger avec transaction ouverte, journal non clôturé, registre de lot
-  désynchronisé de `INBOX`.
+Les propriétés purement temporelles — verrouillage, ordre exact des `rename`, rollback avant
+visibilité — restent couvertes par les tests du pipeline et ne sont pas prouvables après coup.
 
 ---
 
-## 9. Recette du composant
+## 8. Phases du composant optionnel
 
-1. **Sans réseau** — `cargo test -p tripapiers-verify` : aucune dépendance à `llm`, `extract`,
-   `pipeline` ou `store`, ce qu'un test de compilation vérifie explicitement.
-2. **Aller-retour pipeline → vérification** — classer un corpus synthétique avec
-   `classify --all --no-llm`, puis `verify all` : doit sortir 0.
-3. **Matrice de corruption** — pour chaque injection des phases V1 à V3, `verify all` doit
-   sortir non-0 et nommer précisément le fichier et le contrôle en défaut. C'est la recette
-   principale : un audit qui ne détecte pas est pire qu'un audit absent.
-4. **Lecture seule** — `verify all` sur un dépôt monté en lecture seule doit fonctionner et ne
-   rien écrire (contrôlé par comparaison d'empreintes avant/après).
-5. **Indépendance réelle** — muter volontairement `build_sidecar` (par exemple inverser deux
-   clés, ou ne plus trier la liste `tags:`) : les tests du pipeline peuvent rester verts, mais
-   `verify_sidecar` doit détecter la divergence. Ce test est la justification d'existence du
-   composant ; il est marqué et documenté comme tel.
-6. **Dérive du vocabulaire** — durcir `evaluation.yml` après coup (par exemple exiger
-   `confidence.minimum: 90`) et relancer `verify date` : les documents classés sous les anciennes
-   règles doivent être signalés, sans être modifiés. C'est le signal qui dit qu'un `retag`
-   s'impose.
-7. **Profil minimal** — `cargo build -p tripapiers-cli --no-default-features` compile, et
-   `tripapiers verify` renvoie alors une erreur explicite « composant non installé », pas un
-   panic ni un succès silencieux.
+### Phase V1 — Contrats OCR et TAG
+
+- Parseurs indépendants et rapports structurés.
+- Une fixture saine et une fixture corrompue pour chaque champ.
+- Tests croisés : tout artefact produit par le pipeline passe l'audit ; des producteurs mutés
+  volontairement sont détectés.
+
+### Phase V2 — Inventaires
+
+- Parcours bornés des cinq racines.
+- Correspondance des triplets, détection d'orphelins, doublons et dates divergentes.
+- Audit complet de `QUARANTINE`.
+
+### Phase V3 — CLI et diagnostic
+
+- Sous-commandes de `verify`, formats texte et JSON, codes de sortie.
+- Exécution sans réseau et sans dépendance au client LLM.
+- Corpus synthétique d'au moins 500 triplets avec corruptions injectées.
+
+---
+
+## 9. Recette minimale
+
+1. Triplet sain : `verify all` retourne 0.
+2. Modifier un octet du document : les deux liens SHA deviennent invalides.
+3. Modifier le texte OCR sans refaire les tags : `TAG.ocr.sha256` diverge.
+4. Déplacer seulement le TAG sous une autre date : triplets partiels aux deux emplacements.
+5. Ajouter un tag `confiance:90` : rejet explicite.
+6. Créer un lien symbolique dans chaque racine : chaque cas est rejeté sans suivre la cible.
+7. Corrompre `tripapiers.toml` ou faire chevaucher deux racines : audit interrompu avec code 2.
+8. Créer une entrée de quarantaine sans rapport ou sans original : défaut nommé précisément.
+9. Simuler une erreur de lecture au milieu du parcours : code 3, jamais un faux succès.

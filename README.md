@@ -1,41 +1,55 @@
 # tripapiers
 
-Outil local de tri documentaire : classe des documents déposés dans `INBOX`, les archive
-physiquement dans `DATE/YYYY/MM/DD` avec un sidecar YAML déterministe et vérifiable, puis
-génère une vue logique `STRUCTURE` composée uniquement de dossiers et de liens symboliques.
+Outil local de tri documentaire. Les fichiers déposés dans `INBOX` sont extraits, étiquetés et
+rangés selon leur date d'ajout au système :
 
-Trois principes :
+```text
+DOC/YYYY/MM/DD/fichier-original.pdf
+OCR/YYYY/MM/DD/fichier-original.pdf.ocr.yml
+TAG/YYYY/MM/DD/fichier-original.pdf.tag.yml
+```
 
-- **Local.** Aucun stockage distant, aucune API de cloud. Tout se passe sur le système de
-  fichiers de la machine.
-- **Prédictible.** Les artefacts canoniques — YAML, checksums, chemins dérivés — sont produits
-  par du code déterministe, jamais par un modèle de langage. Un document par transaction,
-  verrou exclusif, opérations réversibles, programme de vérification indépendant.
-- **LLM au strict minimum.** Un modèle n'intervient que pour deux tâches : **étiqueter** un
-  texte — il rend une liste de tags, un par ligne, et le code Rust ignore toute ligne non
-  conforme — et **ré-océriser** un document quand l'OCR locale n'a pas suffi. Les tags reçus
-  passent ensuite une évaluation formelle et configurable ; un document qui échoue part en
-  `QUARANTAINE` avec son dossier de preuve, jamais dans l'archive.
+Un ensemble qui ne peut pas être rangé correctement est déplacé avec ses YAML disponibles dans
+`QUARANTINE`. Les cinq racines sont configurables dans `tripapiers.toml` et par les arguments de
+ligne de commande.
+
+Principes :
+
+- **Original préservé.** Le fichier est copié sans renommage ni transformation dans `DOC`.
+- **Artefacts séparés.** Le texte et les métadonnées OCR vivent dans `OCR` ; les tags vivent
+  dans `TAG`.
+- **Confiance locale.** Le score OCR est calculé par les outils locaux. Le modèle appelé par
+  `classify` ne reçoit aucune demande d'estimation de confiance.
+- **Aucun raccourci.** Cette première version ne construit ni vue logique ni lien symbolique.
+- **Transactions bornées.** `sort` range un triplet complet ou place l'ensemble en quarantaine ;
+  `remove` supprime les trois membres ou n'en supprime aucun.
 
 ## État
 
-**Conception.** Ce dépôt ne contient pour l'instant aucun code d'exécution. La conception est
-découpée en deux documents, correspondant aux deux composants du projet :
+**Conception.** Le dépôt ne contient pas encore de code d'exécution.
 
-| Document | Composant |
+| Document | Rôle |
 |---|---|
-| [`doc/traitement-des-fichiers.md`](doc/traitement-des-fichiers.md) | Le pipeline de classement `INBOX → DATE → STRUCTURE` — **obligatoire** |
-| [`doc/verification.md`](doc/verification.md) | L'audit indépendant du corpus — **brouillon, optionnel** |
+| [`doc/traitement-des-fichiers.md`](doc/traitement-des-fichiers.md) | Pipeline, formats, configuration et CLI |
+| [`doc/verification.md`](doc/verification.md) | Brouillon de l'audit indépendant et optionnel |
 
-Le pipeline classe et archive sans le second composant. Le document de vérification, encore à
-l'état de brouillon, propose un audit *a posteriori* de tout le corpus, réimplémenté
-indépendamment du code qui a produit les fichiers.
+Les premières commandes prévues sont :
+
+```text
+tripapiers extract <document>
+tripapiers classify <document.ocr.yml>
+tripapiers sort [<files>...]
+tripapiers remove <document>
+```
+
+Les commandes, arguments et clés de configuration utilisent des noms anglais ; les messages et
+la documentation destinés à l'utilisateur sont en français.
 
 ## Prérequis prévus
 
-- Rust stable (édition 2024)
-- `poppler-utils` — `pdftotext`, `pdftoppm`, `pdfinfo`
-- `tesseract-ocr` avec les paquets de langues `fra` et `eng`
+- Rust stable, édition 2024
+- `poppler-utils` (`pdfinfo`, `pdftotext`, `pdftoppm`)
+- `tesseract-ocr` avec les langues configurées
 
 ## Licence
 
