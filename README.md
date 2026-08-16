@@ -15,14 +15,15 @@ ligne de commande.
 
 Principes :
 
-- **Original préservé.** Le fichier est copié sans renommage ni transformation dans `DOC`.
+- **Octets préservés.** `add` déplace le fichier dans `DOC` sans transformer son contenu ;
+  `--name` peut seulement redéfinir son nom cible.
 - **Artefacts séparés.** Le texte et les métadonnées OCR vivent dans `OCR` ; les tags vivent
   dans `TAG`.
 - **Confiance locale.** Le score OCR est calculé par les outils locaux. Le modèle appelé par
   `classify` ne reçoit aucune demande d'estimation de confiance.
 - **Aucun raccourci.** Cette première version ne construit ni vue logique ni lien symbolique.
-- **Transactions bornées.** `sort` range un triplet complet ou place l'ensemble en quarantaine ;
-  `remove` supprime les trois membres ou n'en supprime aucun.
+- **Étapes composables.** `sort` enchaîne `add`, `extract` et `classify`, puis place en
+  quarantaine tous les artefacts disponibles dès qu'une étape échoue.
 
 ## État
 
@@ -36,11 +37,18 @@ Principes :
 Les premières commandes prévues sont :
 
 ```text
-tripapiers extract <document>
-tripapiers classify <document.ocr.yml>
-tripapiers sort [<files>...]
-tripapiers remove <document>
+tripapiers add <path> [--name <filename>] [--date <YYYY-MM-DD>]
+tripapiers extract <path> [--output <path>] [--force]
+tripapiers extract --name <filename> --date <YYYY-MM-DD>
+tripapiers classify <path> [--output <path>] [--force]
+tripapiers classify --name <filename> --date <YYYY-MM-DD>
+tripapiers sort
+tripapiers remove --name <filename> --date <YYYY-MM-DD>
 ```
+
+Avec `<path>`, `extract` et `classify` travaillent en mode autonome et ignorent le routage
+`DOC/OCR/TAG`. Sans `<path>`, elles exigent `--name` et `--date` et utilisent les racines gérées.
+`remove` n'accepte jamais de chemin positionnel.
 
 Les commandes, arguments et clés de configuration utilisent des noms anglais ; les messages et
 la documentation destinés à l'utilisateur sont en français.

@@ -60,29 +60,29 @@ charge suit la même règle : `photo.jpg`, `photo.jpg.ocr.yml`, `photo.jpg.tag.y
 
 ### 2.2 Date d'ajout
 
-La commande `sort` capture une seule valeur `added_date` au début de la transaction d'un
-document : la date civile courante dans le fuseau local du système. Cette valeur `YYYY-MM-DD`
-est inscrite dans les deux fichiers YAML et réutilisée pour les trois chemins.
+La commande `add` choisit une seule valeur `added_date` : `--date` lorsqu'il est fourni, sinon
+la date civile courante dans le fuseau local du système. Cette valeur `YYYY-MM-DD` détermine le
+chemin sous `DOC`. Les commandes gérées `extract --name … --date …` et
+`classify --name … --date …` reprennent obligatoirement la même date pour `OCR` et `TAG`.
 
-Une relance ne recalcule pas la date si un artefact OCR ou TAG existant porte déjà `added_date` :
-elle reprend cette valeur. Les commandes indépendantes `extract` et `classify` ne déplacent pas
-leurs entrées ; elles conservent donc la date fournie par `--date`, celle dérivée d'un chemin
-géré, celle déjà inscrite dans l'artefact d'entrée ou, à défaut, la date d'exécution.
+En mode autonome avec `<path>`, `extract` utilise la date d'exécution dans le YAML produit et
+`classify` reprend la date inscrite dans son entrée OCR. Ces commandes ne déduisent jamais un
+mode géré de la position du fichier sur le disque.
 
 ### 2.3 Identité et collisions
 
 L'identité stable est le SHA-256 des octets du document. Le nom de fichier sert à résoudre les
 chemins, mais ne remplace jamais cette empreinte.
 
-Avant tout rangement, `sort` réserve les trois chemins cibles :
+`add` réserve d'abord le seul chemin `DOC/YYYY/MM/DD/<filename>` :
 
-- si aucun n'existe, le traitement continue ;
-- si les trois existent et portent le même SHA-256, l'opération retourne `already_exists` sans
-  réécrire les artefacts ;
-- si un chemin existe avec un autre contenu, l'ensemble entrant part dans `QUARANTINE` avec la
-  raison `path_conflict` ;
-- un ensemble partiel est une incohérence et part dans `QUARANTINE` avec la raison
-  `partial_triplet`.
+- s'il n'existe pas, l'ajout continue ;
+- s'il existe avec le même SHA-256, la commande retourne `already_exists` ;
+- s'il existe avec un autre contenu, la commande échoue avec `path_conflict`.
+
+Les états gérés sont volontairement progressifs : `DOC` seul après `add`, `DOC` + `OCR` après
+`extract`, puis `DOC` + `OCR` + `TAG` après `classify`. En revanche, `OCR` sans `DOC`, `TAG`
+sans `OCR`, un nom divergent ou une empreinte croisée invalide constituent une incohérence.
 
 ---
 
@@ -140,68 +140,114 @@ deux racines pointant vers le même dossier.
 
 ---
 
-## 4. Système commun de désignation des fichiers
+## 4. Modes d'adressage
 
-`extract`, `classify` et `remove` acceptent deux formes mutuellement exclusives.
+Le choix du mode est **syntaxique**. La présence d'un argument positionnel `<path>` sélectionne
+le mode autonome ; son absence sélectionne le mode géré. L'application ne déduit jamais le mode
+de la position réelle du fichier.
 
-### 4.1 Forme chemin
+### 4.1 Mode autonome avec `<path>`
+
+Seules `extract` et `classify` acceptent ce mode :
 
 ```text
-tripapiers extract <path> [--output <path>]
-tripapiers classify <path> [--output <path>]
-tripapiers remove <path>
+tripapiers extract <path> [--output <path>] [--force]
+tripapiers classify <path> [--output <path>] [--force]
 ```
 
-Pour `extract`, le chemin vise un document externe, dans `INBOX` ou dans `DOC`. Pour `classify`,
-il vise un `.ocr.yml` externe, dans `INBOX` ou dans `OCR`. Pour `remove`, il peut viser n'importe
-quel membre d'un triplet géré sous `DOC`, `OCR` ou `TAG`. Les suffixes déterministes permettent
-de retrouver les autres membres du triplet.
+Dans ce mode, les racines `DOC`, `OCR` et `TAG` sont ignorées pour la résolution de l'entrée et
+de la sortie, même si `<path>` se trouve physiquement sous l'une d'elles. Sans `--output` :
 
-### 4.2 Forme nom et date
+- `extract /tmp/rapport.pdf` écrit `/tmp/rapport.pdf.ocr.yml` ;
+- `classify /tmp/rapport.pdf.ocr.yml` écrit `/tmp/rapport.pdf.tag.yml`.
+
+`--output` désigne le chemin complet du résultat, nom inclus. `--name` et `--date` sont interdits
+avec `<path>`. Les paramètres OCR, le modèle et les vocabulaires restent chargés depuis la
+configuration ; seuls le routage `DOC/OCR/TAG` et la résolution gérée sont ignorés.
+
+### 4.2 Mode géré sans `<path>`
+
+Sans argument positionnel, `extract` et `classify` exigent simultanément :
 
 ```text
 --name <filename> --date <YYYY-MM-DD>
 ```
 
-Cette forme résout :
+| Commande | Entrée | Sortie |
+|---|---|---|
+| `extract` | `DOC/YYYY/MM/DD/<filename>` | `OCR/YYYY/MM/DD/<filename>.ocr.yml` |
+| `classify` | `OCR/YYYY/MM/DD/<filename>.ocr.yml` | `TAG/YYYY/MM/DD/<filename>.tag.yml` |
 
-| Commande | Entrée résolue |
-|---|---|
-| `extract` | `DOC/YYYY/MM/DD/<filename>` |
-| `classify` | `OCR/YYYY/MM/DD/<filename>.ocr.yml` |
-| `remove` | le triplet `DOC` / `OCR` / `TAG` portant ce nom et cette date |
-
-`--name` n'accepte qu'un nom de base : aucun `/`, `..` ou séparateur de plateforme. `--date`
+`--output` est interdit dans ce mode : la sortie est déterminée par les racines configurées.
+`--name` n'accepte qu'un nom de base, sans `/`, `..` ou séparateur de plateforme. `--date`
 accepte strictement `YYYY-MM-DD` et rejette les dates civiles impossibles.
 
-### 4.3 Sortie d'`extract` et `classify`
+### 4.3 Cas de `add` et `remove`
 
-Sans `--output`, une entrée externe ou placée dans `INBOX` produit son résultat à côté d'elle :
+`add` exige toujours un `<path>`. Il n'existe pas de seconde forme sans chemin :
 
-- `extract rapport.pdf` écrit `rapport.pdf.ocr.yml` à côté de l'entrée ;
-- `classify rapport.pdf.ocr.yml` écrit `rapport.pdf.tag.yml` à côté de l'entrée.
+```text
+tripapiers add <path> [--name <filename>] [--date <YYYY-MM-DD>]
+```
 
-Pour une entrée sous une racine gérée, la séparation est conservée :
+Ici, `--name` et `--date` sont des remplacements facultatifs du nom de base et de la date
+courante choisis par défaut. Contrairement au mode autonome d'`extract` et `classify`, `add`
+utilise toujours la racine `DOC`.
 
-- `extract DOC/YYYY/MM/DD/rapport.pdf` écrit
-  `OCR/YYYY/MM/DD/rapport.pdf.ocr.yml` ;
-- `classify OCR/YYYY/MM/DD/rapport.pdf.ocr.yml` écrit
-  `TAG/YYYY/MM/DD/rapport.pdf.tag.yml` ;
-- la forme `--name` + `--date` applique toujours ces destinations gérées.
+`remove` suit la règle inverse : elle n'accepte jamais de `<path>` et exige toujours la forme
+gérée :
 
-`--output` désigne le chemin complet du fichier produit, nom inclus. Les deux commandes
-refusent d'écraser un fichier existant, sauf avec `--force`. Une écriture passe toujours par un
-fichier temporaire adjacent suivi d'un `rename` atomique.
+```text
+tripapiers remove --name <filename> --date <YYYY-MM-DD>
+```
+
+### 4.4 Écriture, affichage et codes de sortie
+
+`extract` et `classify` écrivent leur artefact, puis affichent aussi le résultat utile sur la
+sortie standard : le texte extrait pour `extract`, un tag par ligne pour `classify`. Le chemin
+du fichier produit et les diagnostics vont sur la sortie d'erreur afin que la sortie standard
+reste réutilisable dans un pipeline shell.
+
+Les écritures refusent d'écraser un fichier existant, sauf avec `--force`, et passent par un
+temporaire adjacent suivi d'un `rename` atomique. Aucun fichier YAML valide n'est laissé après
+un échec.
+
+Codes communs :
+
+| Code | Signification |
+|---|---|
+| `0` | succès |
+| `1` | document ou résultat invalide |
+| `2` | invocation ou configuration invalide |
+| `3` | panne d'infrastructure, d'outil ou de réseau |
+| `4` | conflit avec un artefact existant |
 
 ---
 
 ## 5. Commandes de la première étape
 
-### 5.1 `extract`
+### 5.1 `add`
 
 ```text
-tripapiers extract <document> [--output <ocr-yaml>] [--date <YYYY-MM-DD>]
-tripapiers extract --name <filename> --date <YYYY-MM-DD> [--output <ocr-yaml>]
+tripapiers add <path> [--name <filename>] [--date <YYYY-MM-DD>]
+```
+
+`add` déplace le fichier vers `DOC/YYYY/MM/DD/<filename>`. Le nom par défaut est le nom de base
+de `<path>` et la date par défaut est la date civile courante. Sur le même système de fichiers,
+le déplacement utilise `rename` ; sinon, la commande copie, synchronise, vérifie le SHA-256,
+puis supprime la source.
+
+En cas de succès, elle affiche au minimum `name`, `date`, `path` et `sha256`. En cas d'échec, la
+source reste à sa place. Un fichier cible de même empreinte retourne `already_exists` ; un
+contenu différent au même chemin retourne le code `4`. `already_exists` est un succès idempotent
+de code `0` : après vérification complète de l'empreinte, la source est retirée conformément à
+la sémantique de déplacement d'`add`.
+
+### 5.2 `extract`
+
+```text
+tripapiers extract <path> [--output <ocr-yaml>] [--force]
+tripapiers extract --name <filename> --date <YYYY-MM-DD> [--force]
 ```
 
 La commande lit un document, exécute l'OCR locale, calcule ses métriques déterministes et écrit
@@ -209,72 +255,60 @@ un artefact `.ocr.yml`. Si la confiance locale est inférieure à `ocr.minimum_c
 `ocr.vision_fallback` est activé, elle peut demander au modèle une transcription de secours.
 
 La confiance enregistrée reste toujours la mesure de l'OCR locale. Elle décide du recours à la
-vision, mais le modèle ne reçoit jamais la mission de produire un score de confiance.
+vision, mais le modèle ne reçoit jamais la mission de produire un score de confiance. Après
+écriture, le texte extrait est affiché sur stdout. Tout échec retourne un code non nul.
 
-### 5.2 `classify`
+### 5.3 `classify`
 
 ```text
-tripapiers classify <ocr-yaml> [--output <tag-yaml>]
-tripapiers classify --name <filename> --date <YYYY-MM-DD> [--output <tag-yaml>]
+tripapiers classify <path> [--output <tag-yaml>] [--force]
+tripapiers classify --name <filename> --date <YYYY-MM-DD> [--force]
 ```
 
 La commande lit exclusivement l'artefact OCR, vérifie son schéma et son empreinte, puis envoie
 son champ `text` au modèle avec le vocabulaire rendu depuis `tags.yml`. Le modèle produit une
 liste de tags, un par ligne. Il ne juge pas la qualité OCR et n'émet aucun tag de confiance.
 
-Les lignes non conformes sont ignorées, comptées et conservées dans les informations de
-diagnostic. Les tags acceptés sont dédupliqués et triés avant la sérialisation du `.tag.yml`.
+Les lignes non conformes sont ignorées, comptées et conservées dans les diagnostics. Les tags
+acceptés sont dédupliqués et triés avant la sérialisation du `.tag.yml`, puis affichés sur stdout,
+un par ligne. Tout échec retourne un code non nul.
 
-### 5.3 `sort`
+### 5.4 `sort`
 
 ```text
-tripapiers sort [<files>...] [--date <YYYY-MM-DD>]
+tripapiers sort
 ```
 
-Sans arguments, `sort` regroupe les fichiers ordinaires placés directement dans `INBOX`, dans
-l'ordre lexicographique de l'original. Un fichier portant le suffixe `.ocr.yml` ou `.tag.yml`
-est reconnu comme l'artefact d'un original du même nom, jamais comme un nouveau document. Avec
-des noms, la commande ne traite que les groupes correspondants. Les sous-dossiers et liens
-symboliques sont refusés.
+`sort` inventorie les fichiers ordinaires directement sous `INBOX`, dans l'ordre
+lexicographique. Les sous-dossiers, liens symboliques et fichiers portant les suffixes réservés
+`.ocr.yml` ou `.tag.yml` ne sont pas traités comme des documents.
 
-Un groupe d'entrée peut donc contenir :
+Pour chaque `<path>` trouvé, elle applique exactement cette composition :
 
 ```text
-fichier-original.pdf
-fichier-original.pdf.ocr.yml     # facultatif, produit auparavant par extract
-fichier-original.pdf.tag.yml     # facultatif, produit auparavant par classify
+add <path>
+  on error: move <path> to QUARANTINE
+
+extract --name <name returned by add> --date <date returned by add>
+  on error: move available DOC/OCR files to QUARANTINE
+
+classify --name <name returned by add> --date <date returned by add>
+  on error: move available DOC/OCR/TAG files to QUARANTINE
 ```
 
-Les artefacts déjà présents sont réutilisés seulement après validation de leur schéma et de
-leurs empreintes. Un OCR absent est produit par `extract` ; un TAG absent est produit par
-`classify`. Un YAML invalide ou orphelin est une erreur documentaire et le groupe complet est
-mis en quarantaine.
+`sort` appelle les mêmes services internes que les commandes, sans analyser leur affichage.
+Après `add`, la source n'est plus dans `INBOX`. À chaque échec, tous les artefacts disponibles
+sont déplacés ensemble dans un dossier de `QUARANTINE/YYYY/MM/DD/`, avec `report.yml`. Le
+traitement continue avec le fichier suivant. La commande retourne `0` seulement si tous les
+fichiers ont atteint l'état `classified` ; sinon elle retourne `1` après avoir traité le lot.
 
-Pour chaque document :
-
-1. reprendre `added_date` d'un artefact valide ou la capturer, puis réserver `DOC/YYYY/MM/DD`,
-   `OCR/YYYY/MM/DD` et `TAG/YYYY/MM/DD` ;
-2. valider l'OCR présent dans `INBOX`, ou exécuter la même logique qu'`extract` vers un fichier
-   temporaire ;
-3. valider le TAG présent dans `INBOX`, ou exécuter la même logique que `classify` à partir de
-   l'artefact OCR ;
-4. valider les trois artefacts et leurs empreintes croisées ;
-5. créer les trois dossiers de date si nécessaire ;
-6. déplacer atomiquement l'original et les YAML présents ou générés vers `DOC`, `OCR` et `TAG` ;
-7. enregistrer l'état terminal `sorted` dans le ledger.
-
-Une erreur documentaire ou d'évaluation déplace l'original et tous les YAML déjà produits
-dans un dossier adjacent de `QUARANTINE/YYYY/MM/DD/`. Une panne d'infrastructure laisse
-l'entrée dans `INBOX` et conserve seulement des temporaires récupérables dans l'état local.
-
-### 5.4 `remove`
+### 5.5 `remove`
 
 ```text
-tripapiers remove DOC/YYYY/MM/DD/<filename>
 tripapiers remove --name <filename> --date <YYYY-MM-DD>
 ```
 
-`remove` résout et vérifie le triplet complet, affiche les trois chemins visés, puis supprime :
+`remove` n'accepte aucun argument positionnel. Elle résout puis affiche les membres présents :
 
 ```text
 DOC/YYYY/MM/DD/<filename>
@@ -282,11 +316,12 @@ OCR/YYYY/MM/DD/<filename>.ocr.yml
 TAG/YYYY/MM/DD/<filename>.tag.yml
 ```
 
-La suppression est transactionnelle à l'échelle du triplet : les trois fichiers sont d'abord
-renommés vers un dossier temporaire privé situé sur le même système de fichiers ; ils ne sont
-effacés qu'une fois les trois déplacements réussis. En cas d'échec intermédiaire, le rollback
-les remet en place. `--yes` supprime la confirmation interactive ; `--dry-run` n'effectue aucune
-mutation. Les dossiers de date devenus vides sont retirés jusqu'à leur racine gérée.
+La suppression accepte les états progressifs `DOC`, `DOC+OCR` et `DOC+OCR+TAG`, mais refuse un
+ensemble orphelin. Elle est transactionnelle : tous les membres présents sont d'abord renommés
+vers un dossier temporaire privé situé sur le même système de fichiers ; ils ne sont effacés
+qu'une fois tous les déplacements réussis. En cas d'échec intermédiaire, le rollback les remet
+en place. `--yes` supprime la confirmation interactive ; `--dry-run` n'effectue aucune mutation.
+Les dossiers de date devenus vides sont retirés jusqu'à leur racine gérée.
 
 ---
 
@@ -517,15 +552,18 @@ parse_quality:
   max_rejected_ratio: 0.5
 
 on_failure:
-  low_ocr_confidence: quarantine
-  parse_quality: quarantine
-  missing_required: quarantine
-  unknown_value: quarantine
+  low_ocr_confidence: error
+  parse_quality: error
+  missing_required: error
+  unknown_value: error
 ```
 
 Le seuil OCR est appliqué à `ocr.confidence.value` avant `classify`. Il ne s'agit pas d'un tag.
 Si un repli vision est activé, la politique peut autoriser la classification malgré un score
-local inférieur au seuil en exigeant `vision_fallback_used: true`.
+local inférieur au seuil en exigeant `vision_fallback_used: true`. L'évaluation retourne un
+échec à l'appelant ; elle ne déplace elle-même aucun fichier. En mode autonome ou lors d'un appel
+géré direct, l'entrée reste en place. Seule `sort` transforme cet échec en déplacement vers
+`QUARANTINE`.
 
 ### 8.2 Disposition de `QUARANTINE`
 
@@ -544,22 +582,25 @@ phase en échec, les raisons typées, les chemins cibles prévus, les empreintes
 éventuellement appelé et les lignes rejetées. Aucun élément de quarantaine n'est confondu avec
 un triplet rangé.
 
-Une panne HTTP, un manque d'espace, un verrou indisponible ou une interruption ne constituent
-pas une erreur documentaire : le fichier reste dans `INBOX` pour une relance sûre.
+Lorsqu'elle est pilotée par `sort`, toute classe d'échec — résultat invalide, panne HTTP, manque
+d'espace ou erreur d'outil — déplace les artefacts alors disponibles vers cette disposition.
+Lorsqu'`extract` ou `classify` est appelée directement, elle ne met rien en quarantaine : elle
+préserve son entrée, retire tout résultat temporaire et retourne un code non nul.
 
 ---
 
 ## 9. Transactions, verrouillage et sécurité
 
-- Un verrou `flock` unique protège `sort` et `remove`.
-- `extract` et `classify` prennent un verrou de sortie lorsqu'elles ciblent une racine gérée.
+- Un verrou `flock` unique protège `add`, `sort` et `remove`.
+- `extract` et `classify` prennent le verrou lorsqu'elles sont invoquées sans `<path>` en mode
+  géré. Le mode autonome ne verrouille que son fichier de sortie.
 - Chaque écriture YAML utilise temporaire adjacent, `fsync`, puis `rename`.
-- `sort` ne retire l'original et ses YAML d'`INBOX` qu'après validation du triplet complet.
+- `sort` déplace d'abord l'original par `add`, puis met tous les artefacts disponibles en
+  quarantaine si `extract` ou `classify` échoue.
 - Le journal de transaction permet le rollback après interruption.
 - Aucun parcours ne suit de lien symbolique.
 - Les inventaires sont bornés au dossier attendu ; aucune recherche récursive implicite.
-- `remove` refuse tout chemin qui sort des racines résolues ou dont les empreintes croisées ne
-  forment pas un triplet cohérent.
+- `remove` refuse toute résolution qui sort des racines ou forme un ensemble orphelin.
 
 État durable hors du dépôt, sous `$XDG_STATE_HOME/tripapiers/` :
 
@@ -575,9 +616,9 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 
 ## 10. Invariants
 
-1. La date des chemins est la date d'ajout au système.
-2. Un document rangé possède exactement un fichier dans chacune des racines `DOC`, `OCR` et
-   `TAG`, sous le même `YYYY/MM/DD` et avec le même nom de base.
+1. La date des chemins est celle choisie par `add`, jamais une date extraite du document.
+2. Un ensemble géré est préfixe-complet : `DOC`, puis éventuellement `OCR`, puis éventuellement
+   `TAG`, toujours sous le même `YYYY/MM/DD` et avec le même nom de base.
 3. Les octets de `DOC` sont identiques aux octets ajoutés.
 4. `OCR.source.sha256` correspond au document ; `TAG.source.sha256` aussi.
 5. `TAG.ocr.sha256` correspond exactement au fichier OCR associé.
@@ -586,11 +627,15 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 8. Aucune vue par raccourci ou lien symbolique n'est créée.
 9. Les chemins configurés sont résolus avec la priorité CLI → TOML → défauts.
 10. Toute ligne de tag non conforme est ignorée, jamais réparée.
-11. Une erreur documentaire terminale produit un dossier complet dans `QUARANTINE`.
-12. Une panne d'infrastructure laisse le document dans `INBOX`.
-13. `remove` supprime les trois membres d'un triplet ou n'en supprime aucun.
+11. Tout échec d'une étape de `sort` déplace ensemble les artefacts disponibles dans
+    `QUARANTINE`.
+12. `add` laisse la source à sa place s'il échoue et la retire après un ajout réussi.
+13. `remove` supprime tous les membres présents d'un ensemble cohérent ou n'en supprime aucun.
 14. Toutes les catégories configurées résident dans `tags.yml`.
 15. Les commandes, arguments, clés de configuration et valeurs d'état sont en anglais.
+16. Avec `<path>`, `extract` et `classify` ignorent toujours le routage `DOC/OCR/TAG`.
+17. Sans `<path>`, `extract`, `classify` et `remove` exigent `--name` et `--date`.
+18. `remove` n'accepte jamais d'argument positionnel.
 
 ---
 
@@ -606,7 +651,7 @@ tripapiers/
 │   ├── classify/    # rendu du prompt, client LLM et analyse des lignes
 │   ├── store/       # chemins, écritures atomiques, transactions et suppression
 │   ├── pipeline/    # orchestration de sort et quarantaine
-│   ├── cli/         # extract, classify, sort, remove, config
+│   ├── cli/         # add, extract, classify, sort, remove, config
 │   └── verify/      # composant optionnel et indépendant
 └── tests/fixtures/
 ```
@@ -626,18 +671,19 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Validation des noms, dates, racines et empreintes croisées.
 - Chargement de `tags.yml` et `evaluation.yml` ; instantané du prompt rendu.
 
-### Phase 1 — `extract` et `classify`
+### Phase 1 — `add`, `extract` et `classify`
 
+- Ajout transactionnel dans `DOC`, avec remplacement facultatif du nom et de la date.
 - OCR PDF/images, métriques locales et sérialisation `.ocr.yml`.
 - Repli vision optionnel sans estimation de confiance par le modèle.
 - Étiquetage ligne par ligne et sérialisation `.tag.yml`.
-- Forme chemin, forme `--name` + `--date`, `--output` et `--force`.
+- Sélection syntaxique du mode autonome ou géré, `--output`, affichage stdout et codes de sortie.
 
 ### Phase 2 — `sort` et `QUARANTINE`
 
 - Inventaire borné d'`INBOX`, transactions et verrou.
-- Rangement atomique du triplet dans `DOC`, `OCR` et `TAG`.
-- Collisions, doublons, échecs documentaires et rapports de quarantaine.
+- Composition séquentielle `add` → `extract` → `classify`.
+- Déplacement des artefacts disponibles à chaque échec et rapports de quarantaine.
 
 ### Phase 3 — `remove`
 
@@ -657,18 +703,22 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 
 1. **Configuration** — tester toutes les priorités TOML/CLI, dates invalides, traversées de
    chemin, racines imbriquées et liens symboliques.
-2. **Extraction** — PDF natif, scan propre, scan bruité, image, document vide, PDF corrompu et
+2. **Ajout** — nom et date par défaut, remplacements `--name`/`--date`, autre système de fichiers,
+   doublon exact et conflit de contenu.
+3. **Extraction** — PDF natif, scan propre, scan bruité, image, document vide, PDF corrompu et
    document dépassant `max_pages`.
-3. **Confiance** — vérifier que le même OCR local produit le même score et qu'aucun prompt de
+4. **Confiance** — vérifier que le même OCR local produit le même score et qu'aucun prompt de
    `classify` ne demande une confiance au modèle.
-4. **Classification** — prose, puces, tags inconnus, doublons, lignes tronquées et listes de
+5. **Classification** — prose, puces, tags inconnus, doublons, lignes tronquées et listes de
    dates ou de personnes qui ne doivent pas saturer les tags.
-5. **Rangement** — vérifier les trois chemins et la même date d'ajout, y compris autour de
-   minuit avec une horloge injectée ; couvrir les groupes sans YAML, avec OCR seulement et avec
-   OCR plus TAG déjà générés dans `INBOX`.
-6. **Quarantaine** — vérifier la présence de l'original, des YAML disponibles et du rapport.
-7. **Suppression** — succès complet, membre absent, empreinte divergente et panne injectée à
+6. **Modes** — prouver qu'un `<path>` impose toujours la sortie adjacente ou `--output`, même
+   sous une racine gérée, et que son absence exige `--name` avec `--date`.
+7. **Affichage** — texte OCR et tags sur stdout ; diagnostics sur stderr ; codes non nuls pour
+   chaque classe d'échec.
+8. **Rangement** — injecter un échec après `add`, après `extract` et pendant `classify`, puis
+   vérifier les artefacts exacts déplacés dans `QUARANTINE`.
+9. **Quarantaine** — vérifier la présence des artefacts disponibles et du rapport.
+10. **Suppression** — états `DOC`, `DOC+OCR`, `DOC+OCR+TAG`, ensemble orphelin et panne injectée à
    chaque déplacement temporaire.
-8. **Concurrence** — deux `sort` simultanés et conflit `sort`/`remove`.
-9. **Reprise** — interruption à chaque étape, puis rollback ou continuation sans triplet
-   partiel.
+11. **Concurrence** — deux `sort` simultanés et conflit `sort`/`remove`.
+12. **Reprise** — interruption à chaque étape, puis reprise sans ensemble orphelin.

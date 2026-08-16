@@ -71,10 +71,11 @@ Pour `DOC/YYYY/MM/DD/<filename>` :
 - `YYYY/MM/DD` est une date civile valide ;
 - le fichier est ordinaire, jamais un lien symbolique ;
 - `<filename>` ne porte pas un suffixe réservé `.ocr.yml` ou `.tag.yml` ;
-- son SHA-256 est calculable et correspond aux deux artefacts associés.
+- son SHA-256 est calculable et correspond aux artefacts associés lorsqu'ils sont présents.
 
-La date du chemin est comparée à `source.added_date` dans les deux YAML. Aucun
-tag `date:` et aucune métadonnée du fichier ne sont utilisés pour dériver ce chemin.
+La date du chemin est comparée à `source.added_date` dans chaque YAML présent. Aucun tag `date:`
+et aucune métadonnée du fichier ne sont utilisés pour dériver ce chemin. Un document seul est
+un état valide après `add`.
 
 ### 4.2 Artefact OCR
 
@@ -117,27 +118,28 @@ signalé comme `stale_prompt`, pas comme corrompu, sauf si ses tags enfreignent 
 
 ## 5. Audit global
 
-### 5.1 Correspondance `DOC` / `OCR` / `TAG`
+### 5.1 Progression `DOC` / `OCR` / `TAG`
 
 L'auditeur construit trois ensembles de clés `(date, filename)` sans suivre les liens
-symboliques, puis exige leur égalité exacte.
+symboliques. Il exige une relation d'inclusion : `TAG ⊆ OCR ⊆ DOC`.
 
 Il signale :
 
-- document sans OCR ou sans TAG ;
-- YAML orphelin ;
+- OCR sans document ou TAG sans OCR, qui sont des états orphelins ;
 - membre placé sous une autre date ;
 - nom de base divergent ;
 - SHA-256 divergent ;
 - doublon de contenu sous plusieurs clés, comme avertissement distinct.
 
+`DOC` seul (`added`) et `DOC+OCR` (`extracted`) sont des états valides produits par les commandes
+indépendantes. Ils peuvent être signalés comme incomplets selon la politique de l'audit, mais
+ne sont pas des corruptions. `DOC+OCR+TAG` correspond à l'état `classified`.
+
 ### 5.2 Audit d'`INBOX`
 
-`INBOX` ne contient que des fichiers ordinaires directement sous sa racine. Chaque `.ocr.yml`
-ou `.tag.yml` doit correspondre à un original du même nom. L'auditeur accepte donc un original
-seul, un original avec OCR, ou un original avec OCR et TAG ; il signale tout YAML orphelin, TAG
-sans OCR, sous-dossier, lien symbolique, temporaire abandonné ou fichier déjà présent à
-l'identique sous `DOC`.
+`INBOX` ne contient que les documents sources que `sort` transmettra à `add`. L'auditeur signale
+les fichiers portant les suffixes réservés `.ocr.yml` ou `.tag.yml`, les sous-dossiers, liens
+symboliques, temporaires abandonnés et fichiers déjà présents à l'identique sous `DOC`.
 
 Un fichier ancien dans `INBOX` n'est pas une corruption. Il produit un avertissement
 `pending_too_long` avec un seuil configurable pour attirer l'attention sur une panne récurrente.
@@ -201,8 +203,8 @@ en CI.
 
 | # | Invariant | Contrôle |
 |---|---|---|
-| 1 | chemin fondé sur la date d'ajout | comparaison avec `source.added_date` |
-| 2 | triplet complet sous une même date | égalité des trois inventaires |
+| 1 | date choisie par `add` | comparaison avec `source.added_date` |
+| 2 | progression préfixe-complète | inclusion `TAG ⊆ OCR ⊆ DOC` |
 | 3 | original préservé | empreintes croisées |
 | 4 | OCR lié au document | `OCR.source.sha256` |
 | 5 | TAG lié à l'OCR | `TAG.ocr.sha256` |
@@ -211,11 +213,14 @@ en CI.
 | 8 | aucune vue par lien | refus des liens symboliques |
 | 9 | priorité des chemins | résolution indépendante de la configuration |
 | 10 | lignes invalides non réparées | indirect, via grammaire et diagnostics |
-| 11 | quarantaine complète | audit de l'entrée et du rapport |
-| 12 | panne laissant le document dans `INBOX` | partiellement observable |
-| 13 | suppression tout ou rien | absence de triplet partiel |
+| 11 | échec de `sort` déplaçant les artefacts disponibles | audit de l'entrée et du rapport |
+| 12 | échec d'`add` préservant la source | propriété d'exécution |
+| 13 | suppression tout ou rien des membres présents | absence de nouvel état orphelin |
 | 14 | catégories dans `tags.yml` | validation des valeurs fermées |
 | 15 | interface configurable en anglais | tests CLI et schéma TOML |
+| 16 | `<path>` imposant le mode autonome | tests CLI d'intégration |
+| 17 | mode géré exigeant nom et date | tests CLI d'invocation |
+| 18 | `remove` sans argument positionnel | tests CLI d'invocation |
 
 Les propriétés purement temporelles — verrouillage, ordre exact des `rename`, rollback avant
 visibilité — restent couvertes par les tests du pipeline et ne sont pas prouvables après coup.
@@ -247,10 +252,11 @@ visibilité — restent couvertes par les tests du pipeline et ne sont pas prouv
 
 ## 9. Recette minimale
 
-1. Triplet sain : `verify all` retourne 0.
+1. Ensemble sain dans chacun des états `added`, `extracted` et `classified` : `verify all`
+   retourne 0.
 2. Modifier un octet du document : les deux liens SHA deviennent invalides.
 3. Modifier le texte OCR sans refaire les tags : `TAG.ocr.sha256` diverge.
-4. Déplacer seulement le TAG sous une autre date : triplets partiels aux deux emplacements.
+4. Déplacer seulement le TAG sous une autre date : TAG orphelin aux deux emplacements.
 5. Ajouter un tag `confiance:90` : rejet explicite.
 6. Créer un lien symbolique dans chaque racine : chaque cas est rejeté sans suivre la cible.
 7. Corrompre `tripapiers.toml` ou faire chevaucher deux racines : audit interrompu avec code 2.
