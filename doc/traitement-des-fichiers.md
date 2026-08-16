@@ -115,38 +115,43 @@ concaténation déterministe, dans l'ordre de déclaration.
 schema_version: 1
 namespaces:
   - name: confiance
-    prompt: >-
+    prompt: |-
       La qualité du texte que tu viens de lire : peut-on se fier à cette OCR ?
       Réponds par un pourcentage entier de 0 à 100, arrondi à un multiple de 5.
       100 = texte propre et intégralement lisible ; 50 = lisible mais avec des
       mots manifestement altérés ; 0 = illisible ou vide. Juge le TEXTE, pas ta
-      capacité à l'étiqueter. Émets exactement une ligne. Exemple : confiance:85
+      capacité à l'étiqueter. Émets exactement une ligne.
+      Exemple :
+      confiance:85
     cardinality: { min: 1, max: 1 }
     value_type: percent                    # entier 0..100, comparable
     value_pattern: '^(100|[0-9]{1,2})$'
 
   - name: titre
-    prompt: >-
+    prompt: |-
       Un titre court et descriptif, en minuscules sans accents, mots séparés par
-      des tirets. Exemple : titre:facture-electricite-mars
+      des tirets.
+      Exemple :
+      titre:facture-electricite-mars
     cardinality: { min: 1, max: 1 }
     value_pattern: '^[a-z0-9][a-z0-9-]{0,60}$'
 
   - name: date
-    prompt: >-
+    prompt: |-
       Chaque date portée par le document, au format AAAA-MM-JJ. La date qui
       caractérise le document porte le rôle prin, les autres aux.
       Si le document représente une liste ou un tableau de dates, par exemple
       un document financier, ignore les dates des entrées de cette liste :
       elles ne doivent produire aucun tag date:, afin d'éviter de saturer
       l'ensemble des tags.
-      Exemple : date:prin:2024-03-17
+      Exemple :
+      date:prin:2024-03-17
     roles: [prin, aux]
     cardinality: { min: 1, max: 12 }
     value_pattern: '^\d{4}-\d{2}-\d{2}$'
 
   - name: nom
-    prompt: >-
+    prompt: |-
       Chaque personne physique concernée, au format NOM_Prenom. Le rôle prin
       désigne une partie au document — celle qu'il engage ou dont il traite ;
       le rôle aux désigne une personne seulement mentionnée. Un document peut
@@ -159,15 +164,20 @@ namespaces:
       de participants, ignore les personnes énumérées dans cette liste : elles
       ne doivent produire aucun tag nom:, afin d'éviter de saturer l'ensemble
       des tags.
-      Exemples : nom:prin:DUPONT_Marie / nom:prin:MARTIN_Paul / nom:aux:BERNARD_Luc
+      Exemples :
+      nom:prin:DUPONT_Marie
+      nom:prin:MARTIN_Paul
+      nom:aux:BERNARD_Luc
     roles: [prin, aux]
     cardinality: { min: 0, max: 8 }        # 0 : document impersonnel (§6)
     catalogue: persons.yml                 # optionnel — cf. §11 point 3
 
   - name: cat
-    prompt: >-
+    prompt: |-
       Chaque catégorie du document. Les catégories sont hiérarchiques : émets le
-      chemin complet, du plus général au plus précis. Exemple : cat:sante:ordonnance
+      chemin complet, du plus général au plus précis.
+      Exemple :
+      cat:sante:ordonnance
     cardinality: { min: 1, max: 4 }
     catalogue: category.yml
     hierarchical: true
