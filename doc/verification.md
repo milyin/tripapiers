@@ -218,7 +218,7 @@ en CI.
 | 9 | priorité des chemins | résolution indépendante de la configuration |
 | 10 | lignes invalides non réparées | indirect, via grammaire et diagnostics |
 | 11 | échec de `sort` déplaçant les artefacts disponibles | audit de l'entrée et du rapport |
-| 12 | échec de `take` préservant la source | propriété d'exécution |
+| 12 | échec de `take` préservant la source sans option de quarantaine | propriété d'exécution |
 | 13 | suppression tout ou rien des membres présents | absence de nouvel état orphelin |
 | 14 | catégories dans `tags.yml` | validation des valeurs fermées |
 | 15 | interface configurable en anglais | tests CLI et schéma TOML |

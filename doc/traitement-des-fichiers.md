@@ -134,15 +134,10 @@ La priorité est : argument CLI, fichier TOML, valeur par défaut.
 remplacent ensuite une racine précise. La configuration effectivement résolue peut être
 affichée par `tripapiers config show` et validée par `tripapiers config check`.
 
-Pour les scripts, `tripapiers config show --format shell` émet les chemins absolus résolus sous
-la forme `paths.inbox=<value>`, `paths.quarantine=<value>`, `paths.documents=<value>`,
-`paths.ocr=<value>` et `paths.tags=<value>`, une entrée par ligne. Les valeurs ne sont pas du
-code shell et ne doivent pas être passées à `eval` ; les retours à la ligne sont interdits dans
-les chemins configurés.
-
 Les chemins sont normalisés lexicalement, puis vérifiés après canonicalisation du parent
 existant. L'application refuse une racine vide, `/`, un lien symbolique comme racine gérée ou
-deux racines pointant vers le même dossier.
+deux racines pointant vers le même dossier. Les chemins configurés ne peuvent contenir ni
+retour à la ligne ni caractère de contrôle.
 
 ---
 
@@ -185,8 +180,9 @@ Sans argument positionnel, `extract` et `classify` exigent simultanément :
 | `classify` | `OCR/YYYY/MM/DD/<filename>.ocr.yml` | `TAG/YYYY/MM/DD/<filename>.tag.yml` |
 
 `--output` est interdit dans ce mode : la sortie est déterminée par les racines configurées.
-`--name` n'accepte qu'un nom de base, sans `/`, `..` ou séparateur de plateforme. `--date`
-accepte strictement `YYYY-MM-DD` et rejette les dates civiles impossibles.
+`--name` n'accepte qu'un nom de base, sans `/`, `..`, séparateur de plateforme, retour à la
+ligne ou caractère de contrôle. `--date` accepte strictement `YYYY-MM-DD` et rejette les dates
+civiles impossibles.
 
 ### 4.3 Cas de `take` et `remove`
 
@@ -194,6 +190,7 @@ accepte strictement `YYYY-MM-DD` et rejette les dates civiles impossibles.
 
 ```text
 tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>]
+  [--quarantine-on-error]
 ```
 
 Ici, `--name` et `--date` sont des remplacements facultatifs du nom de base et de la date
@@ -225,6 +222,14 @@ Les écritures refusent d'écraser un fichier existant, sauf avec `--force`, et 
 temporaire adjacent suivi d'un `rename` atomique. Aucun fichier YAML valide n'est laissé après
 un échec.
 
+En mode géré, `take`, `extract` et `classify` acceptent l'option commune
+`--quarantine-on-error`. Si l'opération échoue, la commande déplace elle-même tous les artefacts
+alors disponibles dans `QUARANTINE` et écrit `report.yml`. La commande conserve son code d'échec
+initial ; une panne de mise en quarantaine est ajoutée au diagnostic. Une erreur d'invocation ou
+de configuration est détectée avant toute mutation et ne déclenche pas la quarantaine. Cette
+option est interdite dans le mode autonome de `extract` et `classify`, puisque ce mode ignore les
+racines gérées.
+
 Codes communs :
 
 | Code | Signification |
@@ -239,10 +244,23 @@ Codes communs :
 
 ## 5. Commandes de la première étape
 
-### 5.1 `take`
+### 5.1 `inbox`
+
+```text
+tripapiers inbox
+```
+
+`inbox` affiche les chemins absolus des documents admissibles directement présents sous
+`INBOX`, un par ligne et dans l'ordre lexicographique. Elle ignore les sous-dossiers, les liens
+symboliques et les suffixes réservés `.ocr.yml` et `.tag.yml`. Les retours à la ligne étant
+interdits dans les noms gérés, cette sortie peut être parcourue sans ambiguïté par un script
+Bash. La commande ne modifie aucun fichier.
+
+### 5.2 `take`
 
 ```text
 tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>]
+  [--quarantine-on-error]
 ```
 
 `take` déplace le fichier vers `DOC/YYYY/MM/DD/<filename>`. Le nom par défaut est le nom de base
@@ -251,16 +269,18 @@ le déplacement utilise `rename` ; sinon, la commande copie, synchronise, vérif
 puis supprime la source.
 
 En cas de succès, elle affiche au minimum `name`, `date`, `path` et `sha256`. En cas d'échec, la
-source reste à sa place. Un fichier cible de même empreinte retourne `already_exists` ; un
-contenu différent au même chemin retourne le code `4`. `already_exists` est un succès idempotent
-de code `0` : après vérification complète de l'empreinte, la source est retirée conformément à
-la sémantique de déplacement de `take`.
+source reste à sa place, sauf si `--quarantine-on-error` demande explicitement son déplacement.
+Un fichier cible de même empreinte retourne `already_exists` ; un contenu différent au même
+chemin retourne le code `4`. `already_exists` est un succès idempotent de code `0` : après
+vérification complète de l'empreinte, la source est retirée conformément à la sémantique de
+déplacement de `take`.
 
-### 5.2 `extract`
+### 5.3 `extract`
 
 ```text
 tripapiers extract <path> [--output <ocr-yaml>] [--force]
 tripapiers extract --name <filename> --date <YYYY-MM-DD> [--force]
+  [--quarantine-on-error]
 ```
 
 La commande lit un document, exécute l'OCR locale, calcule ses métriques déterministes et écrit
@@ -272,11 +292,12 @@ vision, mais le modèle ne reçoit jamais la mission de produire un score de con
 écriture du `.ocr.yml`, la commande affiche uniquement son diagnostic. Tout échec retourne un
 code non nul.
 
-### 5.3 `classify`
+### 5.4 `classify`
 
 ```text
 tripapiers classify <path> [--output <tag-yaml>] [--force]
 tripapiers classify --name <filename> --date <YYYY-MM-DD> [--force]
+  [--quarantine-on-error]
 ```
 
 La commande lit exclusivement l'artefact OCR, vérifie son schéma et son empreinte, puis envoie
@@ -287,27 +308,22 @@ Les lignes non conformes sont ignorées, comptées et conservées dans les diagn
 acceptés sont dédupliqués et triés avant la sérialisation du `.tag.yml`. La commande affiche
 uniquement son diagnostic, jamais les tags eux-mêmes. Tout échec retourne un code non nul.
 
-### 5.4 `sort`
+### 5.5 `sort`
 
 ```text
 tripapiers sort
 ```
 
-`sort` inventorie les fichiers ordinaires directement sous `INBOX`, dans l'ordre
-lexicographique. Les sous-dossiers, liens symboliques et fichiers portant les suffixes réservés
-`.ocr.yml` ou `.tag.yml` ne sont pas traités comme des documents.
+`sort` utilise le même inventaire que `inbox`.
 
 Pour chaque `<path>` trouvé, elle applique exactement cette composition :
 
 ```text
-take <path>
-  on error: move <path> to QUARANTINE
+take <path> --name <name> --date <date> --quarantine-on-error
 
-extract --name <name returned by take> --date <date returned by take>
-  on error: move available DOC/OCR files to QUARANTINE
+extract --name <name> --date <date> --quarantine-on-error
 
-classify --name <name returned by take> --date <date returned by take>
-  on error: move available DOC/OCR/TAG files to QUARANTINE
+classify --name <name> --date <date> --quarantine-on-error
 ```
 
 `sort` appelle les mêmes services internes que les commandes, sans analyser leur affichage.
@@ -317,16 +333,21 @@ traitement continue avec le fichier suivant. La commande retourne `0` seulement 
 fichiers ont atteint l'état `classified` ; sinon elle retourne `1` après avoir traité le lot.
 
 Le script exécutable [`scripts/sort-reference.sh`](../scripts/sort-reference.sh) constitue
-l'implémentation Bash de référence de cette composition :
+l'implémentation Bash pédagogique de cette composition :
 
 ```text
-scripts/sort-reference.sh [--config <path>] [--root <path>]
+scripts/sort-reference.sh [<global-options>...]
 ```
 
-Il appelle réellement les trois commandes publiques et produit les mêmes états finaux lorsqu'il
-n'est pas interrompu. Il n'est cependant **pas transactionnel** : les états intermédiaires sous
-`DOC` et `OCR` sont visibles, et un signal entre deux commandes peut demander une reprise
-manuelle.
+Les primitives `inbox` et `--quarantine-on-error` gardent dans l'application les détails de
+configuration, de sélection, de dérivation des chemins, de rapport YAML et de déplacement. Le
+script peut ainsi montrer uniquement la logique métier. Il appelle réellement les trois
+commandes publiques et produit les mêmes états finaux lorsqu'il n'est pas interrompu. Il n'est
+cependant **pas transactionnel** : les états intermédiaires sous `DOC` et `OCR` sont visibles,
+et un signal entre deux commandes peut demander une reprise manuelle.
+
+Les arguments reçus par le script sont transmis tels quels comme arguments globaux de chaque
+appel à `tripapiers` ; la CLI reste donc l'unique responsable de leur validation.
 
 La commande native `sort` a précisément pour rôle d'exécuter la même logique de manière
 transactionnelle. Elle prend le verrou global, dirige les opérations internes de `take`,
@@ -335,7 +356,7 @@ en une seule validation soit l'état `DOC+OCR+TAG`, soit l'ensemble correspondan
 `QUARANTINE`. Après une interruption, la reprise termine cette validation ou restaure l'état
 antérieur ; aucun état intermédiaire non journalisé n'est laissé visible.
 
-### 5.5 `remove`
+### 5.6 `remove`
 
 ```text
 tripapiers remove --name <filename> --date <YYYY-MM-DD>
@@ -662,7 +683,8 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 10. Toute ligne de tag non conforme est ignorée, jamais réparée.
 11. Tout échec d'une étape de `sort` déplace ensemble les artefacts disponibles dans
     `QUARANTINE`.
-12. `take` laisse la source à sa place s'il échoue et la retire après une prise en charge réussie.
+12. Sans `--quarantine-on-error`, `take` laisse la source à sa place s'il échoue ; après une
+    prise en charge réussie, elle la retire.
 13. `remove` supprime tous les membres présents d'un ensemble cohérent ou n'en supprime aucun.
 14. Toutes les catégories configurées résident dans `tags.yml`.
 15. Les commandes, arguments, clés de configuration et valeurs d'état sont en anglais.
@@ -686,7 +708,7 @@ tripapiers/
 │   ├── classify/    # rendu du prompt, client LLM et analyse des lignes
 │   ├── store/       # chemins, écritures atomiques, transactions et suppression
 │   ├── pipeline/    # orchestration de sort et quarantaine
-│   ├── cli/         # take, extract, classify, sort, remove, config
+│   ├── cli/         # inbox, take, extract, classify, sort, remove, config
 │   └── verify/      # composant optionnel et indépendant
 └── tests/fixtures/
 ```
@@ -706,13 +728,15 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Validation des noms, dates, racines et empreintes croisées.
 - Chargement de `tags.yml` et `evaluation.yml` ; instantané du prompt rendu.
 
-### Phase 1 — `take`, `extract` et `classify`
+### Phase 1 — `inbox`, `take`, `extract` et `classify`
 
+- Inventaire public et non destructif avec `inbox`.
 - Ajout transactionnel dans `DOC`, avec remplacement facultatif du nom et de la date.
 - OCR PDF/images, métriques locales et sérialisation `.ocr.yml`.
 - Repli vision optionnel sans estimation de confiance par le modèle.
 - Étiquetage ligne par ligne et sérialisation `.tag.yml`.
 - Sélection syntaxique du mode autonome ou géré, `--output`, diagnostics et codes de sortie.
+- Mise en quarantaine commune avec `--quarantine-on-error` en mode géré.
 
 ### Phase 2 — `sort` et `QUARANTINE`
 
@@ -752,8 +776,9 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
    sous une racine gérée, et que son absence exige `--name` avec `--date`.
 7. **Affichage** — diagnostic seul sur stdout en cas de succès et sur stderr en cas d'échec ;
    absence du texte OCR et des tags ; codes non nuls pour chaque classe d'échec.
-8. **Rangement** — injecter un échec après `take`, après `extract` et pendant `classify`, puis
-   vérifier les artefacts exacts déplacés dans `QUARANTINE`.
+8. **Rangement** — vérifier l'inventaire de `inbox`, puis injecter un échec dans `take`,
+   `extract` et `classify` avec `--quarantine-on-error` et vérifier les artefacts exacts déplacés
+   dans `QUARANTINE`.
 9. **Équivalence** — exécuter le script Bash et `sort` sur deux copies du même corpus sans
    interruption, puis comparer `DOC`, `OCR`, `TAG`, `QUARANTINE`, diagnostics et codes de sortie.
 10. **Transaction** — interrompre `sort` à chaque transition et vérifier qu'aucun staging n'est

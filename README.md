@@ -27,7 +27,8 @@ Principes :
 
 ## État
 
-**Conception.** Le dépôt ne contient pas encore de code d'exécution.
+**Conception.** L'application n'est pas encore implémentée. Le seul exécutable est le script
+Bash pédagogique qui précise le contrat attendu de `sort`.
 
 | Document | Rôle |
 |---|---|
@@ -37,11 +38,12 @@ Principes :
 Les premières commandes prévues sont :
 
 ```text
-tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>]
+tripapiers inbox
+tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>] [--quarantine-on-error]
 tripapiers extract <path> [--output <path>] [--force]
-tripapiers extract --name <filename> --date <YYYY-MM-DD>
+tripapiers extract --name <filename> --date <YYYY-MM-DD> [--quarantine-on-error]
 tripapiers classify <path> [--output <path>] [--force]
-tripapiers classify --name <filename> --date <YYYY-MM-DD>
+tripapiers classify --name <filename> --date <YYYY-MM-DD> [--quarantine-on-error]
 tripapiers sort
 tripapiers remove --name <filename> --date <YYYY-MM-DD>
 ```
@@ -52,10 +54,11 @@ Avec `<path>`, `extract` et `classify` travaillent en mode autonome et ignorent 
 complet dans le YAML correspondant et n'affichent qu'un diagnostic synthétique, jamais le texte
 OCR ni les tags.
 
-[`scripts/sort-reference.sh`](scripts/sort-reference.sh) montre la composition fonctionnelle de
-`sort` en appelant successivement `take`, `extract` et `classify`. Le script expose les états
-intermédiaires ; la commande native `sort` fournit les mêmes résultats finaux avec staging,
-journal et validation transactionnelle.
+[`scripts/sort-reference.sh`](scripts/sort-reference.sh) montre en quelques lignes la composition
+fonctionnelle de `sort`. `inbox` masque l'inventaire technique et `--quarantine-on-error` masque
+le routage des échecs, afin que le script ne décrive que l'enchaînement `take` → `extract` →
+`classify`. Il expose les états intermédiaires ; la commande native `sort` fournit les mêmes
+résultats finaux avec staging, journal et validation transactionnelle.
 
 Les commandes, arguments et clés de configuration utilisent des noms anglais ; les messages et
 la documentation destinés à l'utilisateur sont en français.
