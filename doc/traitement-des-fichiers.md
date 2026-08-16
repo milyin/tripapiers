@@ -60,7 +60,7 @@ charge suit la même règle : `photo.jpg`, `photo.jpg.ocr.yml`, `photo.jpg.tag.y
 
 ### 2.2 Date d'ajout
 
-La commande `add` choisit une seule valeur `added_date` : `--date` lorsqu'il est fourni, sinon
+La commande `take` choisit une seule valeur `added_date` : `--date` lorsqu'il est fourni, sinon
 la date civile courante dans le fuseau local du système. Cette valeur `YYYY-MM-DD` détermine le
 chemin sous `DOC`. Les commandes gérées `extract --name … --date …` et
 `classify --name … --date …` reprennent obligatoirement la même date pour `OCR` et `TAG`.
@@ -74,13 +74,13 @@ mode géré de la position du fichier sur le disque.
 L'identité stable est le SHA-256 des octets du document. Le nom de fichier sert à résoudre les
 chemins, mais ne remplace jamais cette empreinte.
 
-`add` réserve d'abord le seul chemin `DOC/YYYY/MM/DD/<filename>` :
+`take` réserve d'abord le seul chemin `DOC/YYYY/MM/DD/<filename>` :
 
 - s'il n'existe pas, l'ajout continue ;
 - s'il existe avec le même SHA-256, la commande retourne `already_exists` ;
 - s'il existe avec un autre contenu, la commande échoue avec `path_conflict`.
 
-Les états gérés sont volontairement progressifs : `DOC` seul après `add`, `DOC` + `OCR` après
+Les états gérés sont volontairement progressifs : `DOC` seul après `take`, `DOC` + `OCR` après
 `extract`, puis `DOC` + `OCR` + `TAG` après `classify`. En revanche, `OCR` sans `DOC`, `TAG`
 sans `OCR`, un nom divergent ou une empreinte croisée invalide constituent une incohérence.
 
@@ -182,16 +182,16 @@ Sans argument positionnel, `extract` et `classify` exigent simultanément :
 `--name` n'accepte qu'un nom de base, sans `/`, `..` ou séparateur de plateforme. `--date`
 accepte strictement `YYYY-MM-DD` et rejette les dates civiles impossibles.
 
-### 4.3 Cas de `add` et `remove`
+### 4.3 Cas de `take` et `remove`
 
-`add` exige toujours un `<path>`. Il n'existe pas de seconde forme sans chemin :
+`take` exige toujours un `<path>`. Il n'existe pas de seconde forme sans chemin :
 
 ```text
-tripapiers add <path> [--name <filename>] [--date <YYYY-MM-DD>]
+tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>]
 ```
 
 Ici, `--name` et `--date` sont des remplacements facultatifs du nom de base et de la date
-courante choisis par défaut. Contrairement au mode autonome d'`extract` et `classify`, `add`
+courante choisis par défaut. Contrairement au mode autonome d'`extract` et `classify`, `take`
 utilise toujours la racine `DOC`.
 
 `remove` suit la règle inverse : elle n'accepte jamais de `<path>` et exige toujours la forme
@@ -226,13 +226,13 @@ Codes communs :
 
 ## 5. Commandes de la première étape
 
-### 5.1 `add`
+### 5.1 `take`
 
 ```text
-tripapiers add <path> [--name <filename>] [--date <YYYY-MM-DD>]
+tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>]
 ```
 
-`add` déplace le fichier vers `DOC/YYYY/MM/DD/<filename>`. Le nom par défaut est le nom de base
+`take` déplace le fichier vers `DOC/YYYY/MM/DD/<filename>`. Le nom par défaut est le nom de base
 de `<path>` et la date par défaut est la date civile courante. Sur le même système de fichiers,
 le déplacement utilise `rename` ; sinon, la commande copie, synchronise, vérifie le SHA-256,
 puis supprime la source.
@@ -241,7 +241,7 @@ En cas de succès, elle affiche au minimum `name`, `date`, `path` et `sha256`. E
 source reste à sa place. Un fichier cible de même empreinte retourne `already_exists` ; un
 contenu différent au même chemin retourne le code `4`. `already_exists` est un succès idempotent
 de code `0` : après vérification complète de l'empreinte, la source est retirée conformément à
-la sémantique de déplacement d'`add`.
+la sémantique de déplacement de `take`.
 
 ### 5.2 `extract`
 
@@ -286,18 +286,18 @@ lexicographique. Les sous-dossiers, liens symboliques et fichiers portant les su
 Pour chaque `<path>` trouvé, elle applique exactement cette composition :
 
 ```text
-add <path>
+take <path>
   on error: move <path> to QUARANTINE
 
-extract --name <name returned by add> --date <date returned by add>
+extract --name <name returned by take> --date <date returned by take>
   on error: move available DOC/OCR files to QUARANTINE
 
-classify --name <name returned by add> --date <date returned by add>
+classify --name <name returned by take> --date <date returned by take>
   on error: move available DOC/OCR/TAG files to QUARANTINE
 ```
 
 `sort` appelle les mêmes services internes que les commandes, sans analyser leur affichage.
-Après `add`, la source n'est plus dans `INBOX`. À chaque échec, tous les artefacts disponibles
+Après `take`, la source n'est plus dans `INBOX`. À chaque échec, tous les artefacts disponibles
 sont déplacés ensemble dans un dossier de `QUARANTINE/YYYY/MM/DD/`, avec `report.yml`. Le
 traitement continue avec le fichier suivant. La commande retourne `0` seulement si tous les
 fichiers ont atteint l'état `classified` ; sinon elle retourne `1` après avoir traité le lot.
@@ -591,11 +591,11 @@ préserve son entrée, retire tout résultat temporaire et retourne un code non 
 
 ## 9. Transactions, verrouillage et sécurité
 
-- Un verrou `flock` unique protège `add`, `sort` et `remove`.
+- Un verrou `flock` unique protège `take`, `sort` et `remove`.
 - `extract` et `classify` prennent le verrou lorsqu'elles sont invoquées sans `<path>` en mode
   géré. Le mode autonome ne verrouille que son fichier de sortie.
 - Chaque écriture YAML utilise temporaire adjacent, `fsync`, puis `rename`.
-- `sort` déplace d'abord l'original par `add`, puis met tous les artefacts disponibles en
+- `sort` déplace d'abord l'original par `take`, puis met tous les artefacts disponibles en
   quarantaine si `extract` ou `classify` échoue.
 - Le journal de transaction permet le rollback après interruption.
 - Aucun parcours ne suit de lien symbolique.
@@ -616,7 +616,7 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 
 ## 10. Invariants
 
-1. La date des chemins est celle choisie par `add`, jamais une date extraite du document.
+1. La date des chemins est celle choisie par `take`, jamais une date extraite du document.
 2. Un ensemble géré est préfixe-complet : `DOC`, puis éventuellement `OCR`, puis éventuellement
    `TAG`, toujours sous le même `YYYY/MM/DD` et avec le même nom de base.
 3. Les octets de `DOC` sont identiques aux octets ajoutés.
@@ -629,7 +629,7 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 10. Toute ligne de tag non conforme est ignorée, jamais réparée.
 11. Tout échec d'une étape de `sort` déplace ensemble les artefacts disponibles dans
     `QUARANTINE`.
-12. `add` laisse la source à sa place s'il échoue et la retire après un ajout réussi.
+12. `take` laisse la source à sa place s'il échoue et la retire après une prise en charge réussie.
 13. `remove` supprime tous les membres présents d'un ensemble cohérent ou n'en supprime aucun.
 14. Toutes les catégories configurées résident dans `tags.yml`.
 15. Les commandes, arguments, clés de configuration et valeurs d'état sont en anglais.
@@ -651,7 +651,7 @@ tripapiers/
 │   ├── classify/    # rendu du prompt, client LLM et analyse des lignes
 │   ├── store/       # chemins, écritures atomiques, transactions et suppression
 │   ├── pipeline/    # orchestration de sort et quarantaine
-│   ├── cli/         # add, extract, classify, sort, remove, config
+│   ├── cli/         # take, extract, classify, sort, remove, config
 │   └── verify/      # composant optionnel et indépendant
 └── tests/fixtures/
 ```
@@ -671,7 +671,7 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Validation des noms, dates, racines et empreintes croisées.
 - Chargement de `tags.yml` et `evaluation.yml` ; instantané du prompt rendu.
 
-### Phase 1 — `add`, `extract` et `classify`
+### Phase 1 — `take`, `extract` et `classify`
 
 - Ajout transactionnel dans `DOC`, avec remplacement facultatif du nom et de la date.
 - OCR PDF/images, métriques locales et sérialisation `.ocr.yml`.
@@ -682,7 +682,7 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 ### Phase 2 — `sort` et `QUARANTINE`
 
 - Inventaire borné d'`INBOX`, transactions et verrou.
-- Composition séquentielle `add` → `extract` → `classify`.
+- Composition séquentielle `take` → `extract` → `classify`.
 - Déplacement des artefacts disponibles à chaque échec et rapports de quarantaine.
 
 ### Phase 3 — `remove`
@@ -715,7 +715,7 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
    sous une racine gérée, et que son absence exige `--name` avec `--date`.
 7. **Affichage** — texte OCR et tags sur stdout ; diagnostics sur stderr ; codes non nuls pour
    chaque classe d'échec.
-8. **Rangement** — injecter un échec après `add`, après `extract` et pendant `classify`, puis
+8. **Rangement** — injecter un échec après `take`, après `extract` et pendant `classify`, puis
    vérifier les artefacts exacts déplacés dans `QUARANTINE`.
 9. **Quarantaine** — vérifier la présence des artefacts disponibles et du rapport.
 10. **Suppression** — états `DOC`, `DOC+OCR`, `DOC+OCR+TAG`, ensemble orphelin et panne injectée à

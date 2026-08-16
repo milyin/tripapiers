@@ -15,14 +15,14 @@ ligne de commande.
 
 Principes :
 
-- **Octets préservés.** `add` déplace le fichier dans `DOC` sans transformer son contenu ;
+- **Octets préservés.** `take` déplace le fichier dans `DOC` sans transformer son contenu ;
   `--name` peut seulement redéfinir son nom cible.
 - **Artefacts séparés.** Le texte et les métadonnées OCR vivent dans `OCR` ; les tags vivent
   dans `TAG`.
 - **Confiance locale.** Le score OCR est calculé par les outils locaux. Le modèle appelé par
   `classify` ne reçoit aucune demande d'estimation de confiance.
 - **Aucun raccourci.** Cette première version ne construit ni vue logique ni lien symbolique.
-- **Étapes composables.** `sort` enchaîne `add`, `extract` et `classify`, puis place en
+- **Étapes composables.** `sort` enchaîne `take`, `extract` et `classify`, puis place en
   quarantaine tous les artefacts disponibles dès qu'une étape échoue.
 
 ## État
@@ -37,7 +37,7 @@ Principes :
 Les premières commandes prévues sont :
 
 ```text
-tripapiers add <path> [--name <filename>] [--date <YYYY-MM-DD>]
+tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>]
 tripapiers extract <path> [--output <path>] [--force]
 tripapiers extract --name <filename> --date <YYYY-MM-DD>
 tripapiers classify <path> [--output <path>] [--force]

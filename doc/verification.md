@@ -75,7 +75,7 @@ Pour `DOC/YYYY/MM/DD/<filename>` :
 
 La date du chemin est comparée à `source.added_date` dans chaque YAML présent. Aucun tag `date:`
 et aucune métadonnée du fichier ne sont utilisés pour dériver ce chemin. Un document seul est
-un état valide après `add`.
+un état valide après `take`.
 
 ### 4.2 Artefact OCR
 
@@ -131,13 +131,13 @@ Il signale :
 - SHA-256 divergent ;
 - doublon de contenu sous plusieurs clés, comme avertissement distinct.
 
-`DOC` seul (`added`) et `DOC+OCR` (`extracted`) sont des états valides produits par les commandes
+`DOC` seul (`taken`) et `DOC+OCR` (`extracted`) sont des états valides produits par les commandes
 indépendantes. Ils peuvent être signalés comme incomplets selon la politique de l'audit, mais
 ne sont pas des corruptions. `DOC+OCR+TAG` correspond à l'état `classified`.
 
 ### 5.2 Audit d'`INBOX`
 
-`INBOX` ne contient que les documents sources que `sort` transmettra à `add`. L'auditeur signale
+`INBOX` ne contient que les documents sources que `sort` transmettra à `take`. L'auditeur signale
 les fichiers portant les suffixes réservés `.ocr.yml` ou `.tag.yml`, les sous-dossiers, liens
 symboliques, temporaires abandonnés et fichiers déjà présents à l'identique sous `DOC`.
 
@@ -203,7 +203,7 @@ en CI.
 
 | # | Invariant | Contrôle |
 |---|---|---|
-| 1 | date choisie par `add` | comparaison avec `source.added_date` |
+| 1 | date choisie par `take` | comparaison avec `source.added_date` |
 | 2 | progression préfixe-complète | inclusion `TAG ⊆ OCR ⊆ DOC` |
 | 3 | original préservé | empreintes croisées |
 | 4 | OCR lié au document | `OCR.source.sha256` |
@@ -214,7 +214,7 @@ en CI.
 | 9 | priorité des chemins | résolution indépendante de la configuration |
 | 10 | lignes invalides non réparées | indirect, via grammaire et diagnostics |
 | 11 | échec de `sort` déplaçant les artefacts disponibles | audit de l'entrée et du rapport |
-| 12 | échec d'`add` préservant la source | propriété d'exécution |
+| 12 | échec de `take` préservant la source | propriété d'exécution |
 | 13 | suppression tout ou rien des membres présents | absence de nouvel état orphelin |
 | 14 | catégories dans `tags.yml` | validation des valeurs fermées |
 | 15 | interface configurable en anglais | tests CLI et schéma TOML |
@@ -252,7 +252,7 @@ visibilité — restent couvertes par les tests du pipeline et ne sont pas prouv
 
 ## 9. Recette minimale
 
-1. Ensemble sain dans chacun des états `added`, `extracted` et `classified` : `verify all`
+1. Ensemble sain dans chacun des états `taken`, `extracted` et `classified` : `verify all`
    retourne 0.
 2. Modifier un octet du document : les deux liens SHA deviennent invalides.
 3. Modifier le texte OCR sans refaire les tags : `TAG.ocr.sha256` diverge.
