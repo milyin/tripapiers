@@ -52,6 +52,11 @@ Avec `<path>`, `extract` et `classify` travaillent en mode autonome et ignorent 
 complet dans le YAML correspondant et n'affichent qu'un diagnostic synthétique, jamais le texte
 OCR ni les tags.
 
+[`scripts/sort-reference.sh`](scripts/sort-reference.sh) montre la composition fonctionnelle de
+`sort` en appelant successivement `take`, `extract` et `classify`. Le script expose les états
+intermédiaires ; la commande native `sort` fournit les mêmes résultats finaux avec staging,
+journal et validation transactionnelle.
+
 Les commandes, arguments et clés de configuration utilisent des noms anglais ; les messages et
 la documentation destinés à l'utilisateur sont en français.
 

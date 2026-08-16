@@ -134,6 +134,12 @@ La priorité est : argument CLI, fichier TOML, valeur par défaut.
 remplacent ensuite une racine précise. La configuration effectivement résolue peut être
 affichée par `tripapiers config show` et validée par `tripapiers config check`.
 
+Pour les scripts, `tripapiers config show --format shell` émet les chemins absolus résolus sous
+la forme `paths.inbox=<value>`, `paths.quarantine=<value>`, `paths.documents=<value>`,
+`paths.ocr=<value>` et `paths.tags=<value>`, une entrée par ligne. Les valeurs ne sont pas du
+code shell et ne doivent pas être passées à `eval` ; les retours à la ligne sont interdits dans
+les chemins configurés.
+
 Les chemins sont normalisés lexicalement, puis vérifiés après canonicalisation du parent
 existant. L'application refuse une racine vide, `/`, un lien symbolique comme racine gérée ou
 deux racines pointant vers le même dossier.
@@ -309,6 +315,25 @@ Après `take`, la source n'est plus dans `INBOX`. À chaque échec, tous les art
 sont déplacés ensemble dans un dossier de `QUARANTINE/YYYY/MM/DD/`, avec `report.yml`. Le
 traitement continue avec le fichier suivant. La commande retourne `0` seulement si tous les
 fichiers ont atteint l'état `classified` ; sinon elle retourne `1` après avoir traité le lot.
+
+Le script exécutable [`scripts/sort-reference.sh`](../scripts/sort-reference.sh) constitue
+l'implémentation Bash de référence de cette composition :
+
+```text
+scripts/sort-reference.sh [--config <path>] [--root <path>]
+```
+
+Il appelle réellement les trois commandes publiques et produit les mêmes états finaux lorsqu'il
+n'est pas interrompu. Il n'est cependant **pas transactionnel** : les états intermédiaires sous
+`DOC` et `OCR` sont visibles, et un signal entre deux commandes peut demander une reprise
+manuelle.
+
+La commande native `sort` a précisément pour rôle d'exécuter la même logique de manière
+transactionnelle. Elle prend le verrou global, dirige les opérations internes de `take`,
+`extract` et `classify` vers un staging privé, journalise chaque transition, puis rend visible
+en une seule validation soit l'état `DOC+OCR+TAG`, soit l'ensemble correspondant dans
+`QUARANTINE`. Après une interruption, la reprise termine cette validation ou restaure l'état
+antérieur ; aucun état intermédiaire non journalisé n'est laissé visible.
 
 ### 5.5 `remove`
 
@@ -603,8 +628,8 @@ préserve son entrée, retire tout résultat temporaire et retourne un code non 
 - `extract` et `classify` prennent le verrou lorsqu'elles sont invoquées sans `<path>` en mode
   géré. Le mode autonome ne verrouille que son fichier de sortie.
 - Chaque écriture YAML utilise temporaire adjacent, `fsync`, puis `rename`.
-- `sort` déplace d'abord l'original par `take`, puis met tous les artefacts disponibles en
-  quarantaine si `extract` ou `classify` échoue.
+- `sort` applique `take`, `extract` et `classify` dans un staging privé, puis valide en une fois
+  le triplet classé ou l'ensemble mis en quarantaine.
 - Le journal de transaction permet le rollback après interruption.
 - Aucun parcours ne suit de lien symbolique.
 - Les inventaires sont bornés au dossier attendu ; aucune recherche récursive implicite.
@@ -652,6 +677,8 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 ```text
 tripapiers/
 ├── Cargo.toml
+├── scripts/
+│   └── sort-reference.sh
 ├── crates/
 │   ├── core/        # contrats OCR/TAG, empreintes et résolution des triplets
 │   ├── config/      # tripapiers.toml, tags.yml, evaluation.yml
@@ -692,6 +719,8 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Inventaire borné d'`INBOX`, transactions et verrou.
 - Composition séquentielle `take` → `extract` → `classify`.
 - Déplacement des artefacts disponibles à chaque échec et rapports de quarantaine.
+- Tests de conformité entre le script Bash de référence et la commande native sur les mêmes
+  scénarios sans interruption.
 
 ### Phase 3 — `remove`
 
@@ -725,8 +754,12 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
    absence du texte OCR et des tags ; codes non nuls pour chaque classe d'échec.
 8. **Rangement** — injecter un échec après `take`, après `extract` et pendant `classify`, puis
    vérifier les artefacts exacts déplacés dans `QUARANTINE`.
-9. **Quarantaine** — vérifier la présence des artefacts disponibles et du rapport.
-10. **Suppression** — états `DOC`, `DOC+OCR`, `DOC+OCR+TAG`, ensemble orphelin et panne injectée à
+9. **Équivalence** — exécuter le script Bash et `sort` sur deux copies du même corpus sans
+   interruption, puis comparer `DOC`, `OCR`, `TAG`, `QUARANTINE`, diagnostics et codes de sortie.
+10. **Transaction** — interrompre `sort` à chaque transition et vérifier qu'aucun staging n'est
+    visible ; documenter que ce test ne s'applique pas au script de référence.
+11. **Quarantaine** — vérifier la présence des artefacts disponibles et du rapport.
+12. **Suppression** — états `DOC`, `DOC+OCR`, `DOC+OCR+TAG`, ensemble orphelin et panne injectée à
    chaque déplacement temporaire.
-11. **Concurrence** — deux `sort` simultanés et conflit `sort`/`remove`.
-12. **Reprise** — interruption à chaque étape, puis reprise sans ensemble orphelin.
+13. **Concurrence** — deux `sort` simultanés et conflit `sort`/`remove`.
+14. **Reprise** — interruption à chaque étape, puis reprise sans ensemble orphelin.

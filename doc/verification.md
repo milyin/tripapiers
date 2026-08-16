@@ -135,6 +135,10 @@ Il signale :
 indépendantes. Ils peuvent être signalés comme incomplets selon la politique de l'audit, mais
 ne sont pas des corruptions. `DOC+OCR+TAG` correspond à l'état `classified`.
 
+Le script Bash de référence peut rendre ces états progressifs visibles entre deux commandes.
+La commande native `sort`, elle, les garde dans son staging transactionnel. L'auditeur ne déduit
+pas leur origine ; il peut seulement avertir lorsqu'un état progressif dépasse un délai donné.
+
 ### 5.2 Audit d'`INBOX`
 
 `INBOX` ne contient que les documents sources que `sort` transmettra à `take`. L'auditeur signale
