@@ -48,7 +48,9 @@ tripapiers remove --name <filename> --date <YYYY-MM-DD>
 
 Avec `<path>`, `extract` et `classify` travaillent en mode autonome et ignorent le routage
 `DOC/OCR/TAG`. Sans `<path>`, elles exigent `--name` et `--date` et utilisent les racines gérées.
-`remove` n'accepte jamais de chemin positionnel.
+`remove` n'accepte jamais de chemin positionnel. `extract` et `classify` écrivent leur résultat
+complet dans le YAML correspondant et n'affichent qu'un diagnostic synthétique, jamais le texte
+OCR ni les tags.
 
 Les commandes, arguments et clés de configuration utilisent des noms anglais ; les messages et
 la documentation destinés à l'utilisateur sont en français.

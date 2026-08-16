@@ -201,12 +201,19 @@ gérée :
 tripapiers remove --name <filename> --date <YYYY-MM-DD>
 ```
 
-### 4.4 Écriture, affichage et codes de sortie
+### 4.4 Écriture, diagnostic et codes de sortie
 
-`extract` et `classify` écrivent leur artefact, puis affichent aussi le résultat utile sur la
-sortie standard : le texte extrait pour `extract`, un tag par ligne pour `classify`. Le chemin
-du fichier produit et les diagnostics vont sur la sortie d'erreur afin que la sortie standard
-reste réutilisable dans un pipeline shell.
+`extract` et `classify` écrivent toujours leur résultat complet dans le fichier YAML
+correspondant. Elles n'affichent ni le texte OCR ni la liste des tags. Après traitement, stdout
+contient uniquement un diagnostic synthétique :
+
+- `extract` : état, chemin du `.ocr.yml`, moteur, langues, confiance locale et taille du texte ;
+- `classify` : état, chemin du `.tag.yml`, modèle et nombres de tags acceptés ou de lignes
+  rejetées.
+
+En cas d'échec, le diagnostic est écrit sur stderr. Il identifie la phase, la classe d'erreur et
+le chemin concerné, sans inclure le contenu documentaire. Le format texte est destiné à
+l'utilisateur ; un futur `--format json` pourra exposer les mêmes champs aux scripts.
 
 Les écritures refusent d'écraser un fichier existant, sauf avec `--force`, et passent par un
 temporaire adjacent suivi d'un `rename` atomique. Aucun fichier YAML valide n'est laissé après
@@ -256,7 +263,8 @@ un artefact `.ocr.yml`. Si la confiance locale est inférieure à `ocr.minimum_c
 
 La confiance enregistrée reste toujours la mesure de l'OCR locale. Elle décide du recours à la
 vision, mais le modèle ne reçoit jamais la mission de produire un score de confiance. Après
-écriture, le texte extrait est affiché sur stdout. Tout échec retourne un code non nul.
+écriture du `.ocr.yml`, la commande affiche uniquement son diagnostic. Tout échec retourne un
+code non nul.
 
 ### 5.3 `classify`
 
@@ -270,8 +278,8 @@ son champ `text` au modèle avec le vocabulaire rendu depuis `tags.yml`. Le mod�
 liste de tags, un par ligne. Il ne juge pas la qualité OCR et n'émet aucun tag de confiance.
 
 Les lignes non conformes sont ignorées, comptées et conservées dans les diagnostics. Les tags
-acceptés sont dédupliqués et triés avant la sérialisation du `.tag.yml`, puis affichés sur stdout,
-un par ligne. Tout échec retourne un code non nul.
+acceptés sont dédupliqués et triés avant la sérialisation du `.tag.yml`. La commande affiche
+uniquement son diagnostic, jamais les tags eux-mêmes. Tout échec retourne un code non nul.
 
 ### 5.4 `sort`
 
@@ -677,7 +685,7 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - OCR PDF/images, métriques locales et sérialisation `.ocr.yml`.
 - Repli vision optionnel sans estimation de confiance par le modèle.
 - Étiquetage ligne par ligne et sérialisation `.tag.yml`.
-- Sélection syntaxique du mode autonome ou géré, `--output`, affichage stdout et codes de sortie.
+- Sélection syntaxique du mode autonome ou géré, `--output`, diagnostics et codes de sortie.
 
 ### Phase 2 — `sort` et `QUARANTINE`
 
@@ -713,8 +721,8 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
    dates ou de personnes qui ne doivent pas saturer les tags.
 6. **Modes** — prouver qu'un `<path>` impose toujours la sortie adjacente ou `--output`, même
    sous une racine gérée, et que son absence exige `--name` avec `--date`.
-7. **Affichage** — texte OCR et tags sur stdout ; diagnostics sur stderr ; codes non nuls pour
-   chaque classe d'échec.
+7. **Affichage** — diagnostic seul sur stdout en cas de succès et sur stderr en cas d'échec ;
+   absence du texte OCR et des tags ; codes non nuls pour chaque classe d'échec.
 8. **Rangement** — injecter un échec après `take`, après `extract` et pendant `classify`, puis
    vérifier les artefacts exacts déplacés dans `QUARANTINE`.
 9. **Quarantaine** — vérifier la présence des artefacts disponibles et du rapport.
