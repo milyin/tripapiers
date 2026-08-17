@@ -19,8 +19,11 @@ Principes :
   `--name` peut seulement redéfinir son nom cible.
 - **Artefacts séparés.** Le texte et les métadonnées OCR vivent dans `OCR` ; les tags vivent
   dans `TAG`.
-- **Confiance locale.** Le score OCR est calculé par les outils locaux. Le modèle appelé par
-  `classify` ne reçoit aucune demande d'estimation de confiance.
+- **Classification mécanique.** `classify` applique uniquement les expressions régulières de
+  `tags.yml`. Un agent peut faire évoluer ces règles après une reclassification complète du
+  corpus, mais aucun modèle n'intervient dans la classification courante.
+- **Confiance locale.** Le score OCR est calculé par les outils locaux et n'est jamais demandé à
+  un modèle.
 - **Aucun raccourci.** Cette première version ne construit ni vue logique ni lien symbolique.
 - **Étapes composables.** `sort` enchaîne `take`, `extract` et `classify`, puis place en
   quarantaine tous les artefacts disponibles dès qu'une étape échoue.
@@ -33,6 +36,7 @@ Bash pédagogique qui précise le contrat attendu de `sort`.
 | Document | Rôle |
 |---|---|
 | [`doc/traitement-des-fichiers.md`](doc/traitement-des-fichiers.md) | Pipeline, formats, configuration et CLI |
+| [`doc/evolution-des-regles.md`](doc/evolution-des-regles.md) | Boucle de création, régression et publication des regex |
 | [`doc/verification.md`](doc/verification.md) | Brouillon de l'audit indépendant et optionnel |
 
 Les premières commandes prévues sont :
@@ -46,6 +50,15 @@ tripapiers classify <path> [--output <path>] [--force]
 tripapiers classify --name <filename> --date <YYYY-MM-DD> [--quarantine-on-error]
 tripapiers sort
 tripapiers remove --name <filename> --date <YYYY-MM-DD>
+tripapiers rules begin --name <filename> --date <YYYY-MM-DD>
+tripapiers rules expect --session <id> [--tag <tag>]...
+tripapiers rules check --session <id>
+tripapiers rules run --session <id>
+tripapiers rules diff --session <id>
+tripapiers rules show --session <id> --document <id> [--full-text]
+tripapiers rules decide --session <id> --change <id> --accept|--reject --reason <text>
+tripapiers rules commit --session <id>
+tripapiers rules abort --session <id>
 ```
 
 Avec `<path>`, `extract` et `classify` travaillent en mode autonome et ignorent le routage
@@ -53,6 +66,10 @@ Avec `<path>`, `extract` et `classify` travaillent en mode autonome et ignorent 
 `remove` n'accepte jamais de chemin positionnel. `extract` et `classify` écrivent leur résultat
 complet dans le YAML correspondant et n'affichent qu'un diagnostic synthétique, jamais le texte
 OCR ni les tags.
+
+Chaque texte OCR est aussi indexé dans SQLite afin de pouvoir tester rapidement une révision de
+`tags.yml` sur l'ensemble du corpus. Les fichiers visibles restent les autorités et permettent
+de reconstruire cette base.
 
 [`scripts/sort-reference.sh`](scripts/sort-reference.sh) montre en quelques lignes la composition
 fonctionnelle de `sort`. `inbox` masque l'inventaire technique et `--quarantine-on-error` masque
@@ -68,6 +85,7 @@ la documentation destinés à l'utilisateur sont en français.
 - Rust stable, édition 2024
 - `poppler-utils` (`pdfinfo`, `pdftotext`, `pdftoppm`)
 - `tesseract-ocr` avec les langues configurées
+- SQLite 3
 
 ## Licence
 

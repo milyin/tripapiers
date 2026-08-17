@@ -37,7 +37,7 @@ Entrées autorisées :
 
 Entrées interdites pour l'audit normal :
 
-- `executions.db` ;
+- `tripapiers.db` ;
 - `journal/` ;
 - réponses brutes ou caches internes d'un fournisseur ;
 - fonctions mutatives de `store` et `pipeline`.
@@ -103,16 +103,20 @@ Pour `TAG/YYYY/MM/DD/<filename>.tag.yml` :
 |---|---|
 | Source | nom, SHA-256 et `added_date` identiques à l'original et à l'OCR |
 | Lien OCR | `ocr.sha256` correspond aux octets du `.ocr.yml` associé |
-| Modèle | identifiant non vide et horodatage analysable |
-| Prompt | empreinte recalculée depuis `tags.yml` lorsqu'il s'agit de la version courante |
-| Grammaire | segments, rôles, casse et bornes dures respectés |
-| Valeurs | tag présent parmi les feuilles développées de l'arborescence `tags.yml` |
-| Cardinalités | règles de `tags.yml` et `evaluation.yml` satisfaites |
-| Ordre | tags triés lexicographiquement et sans doublon |
+| Moteur | `classification.engine: regexp`, version connue et horodatage analysable |
+| Règles | `rules_sha256` recalculée depuis la forme canonique de `tags.yml` courant |
+| Revue | `review_status` dans `pending\|accepted` |
+| Grammaire | segments, casse et bornes dures respectés |
+| Valeurs | chemin statique déclaré ou résultat valide d'un gabarit `emit` déclaré |
+| Correspondances | règle connue, plage UTF-8 valide et regex correspondant réellement au texte OCR |
+| Résultat | réexécution indépendante donnant exactement le même ensemble de tags |
+| Cardinalités | satisfaites si `accepted`; sinon violations exactes consignées si `pending` |
+| Ordre | tags et preuves triés lexicographiquement, sans doublon |
 | Confiance | aucun namespace `confiance:` présent |
 
-Un artefact classé avec une ancienne empreinte de prompt reste historiquement lisible. Il est
-signalé comme `stale_prompt`, pas comme corrompu, sauf si ses tags enfreignent le contrat actuel.
+Un artefact classé avec une ancienne empreinte de règles reste historiquement lisible. Il est
+signalé comme `stale_rules`, pas comme corrompu. Sans la révision historique correspondante,
+l'auditeur ne prétend pas pouvoir reproduire ses tags.
 
 ---
 
@@ -134,6 +138,8 @@ Il signale :
 `DOC` seul (`taken`) et `DOC+OCR` (`extracted`) sont des états valides produits par les commandes
 indépendantes. Ils peuvent être signalés comme incomplets selon la politique de l'audit, mais
 ne sont pas des corruptions. `DOC+OCR+TAG` correspond à l'état `classified`.
+Le champ `classification.review_status` distingue ensuite une classification mécanique encore
+à revoir d'une classification devenue référence.
 
 Le script Bash de référence peut rendre ces états progressifs visibles entre deux commandes.
 La commande native `sort`, elle, les garde dans son staging transactionnel. L'auditeur ne déduit
@@ -216,15 +222,18 @@ en CI.
 | 7 | date documentaire sans effet sur le chemin | contrôle de dérivation |
 | 8 | aucune vue par lien | refus des liens symboliques |
 | 9 | priorité des chemins | résolution indépendante de la configuration |
-| 10 | lignes invalides non réparées | indirect, via grammaire et diagnostics |
+| 10 | tags issus uniquement des regex | réexécution indépendante sur le texte OCR |
 | 11 | échec de `sort` déplaçant les artefacts disponibles | audit de l'entrée et du rapport |
 | 12 | échec de `take` préservant la source sans option de quarantaine | propriété d'exécution |
 | 13 | suppression tout ou rien des membres présents | absence de nouvel état orphelin |
-| 14 | catégories dans `tags.yml` | validation de l'arborescence et de ses feuilles développées |
+| 14 | catégories dans `tags.yml` | validation des feuilles de règles et chemins statiques |
 | 15 | interface configurable en anglais | tests CLI et schéma TOML |
 | 16 | `<path>` imposant le mode autonome | tests CLI d'intégration |
 | 17 | mode géré exigeant nom et date | tests CLI d'invocation |
 | 18 | `remove` sans argument positionnel | tests CLI d'invocation |
+| 19 | copie SQLite de chaque texte OCR | propriété d'exécution, hors audit normal |
+| 20 | revue globale avant activation des règles | propriété de la procédure de publication |
+| 21 | classification déterministe | double réexécution indépendante des regex |
 
 Les propriétés purement temporelles — verrouillage, ordre exact des `rename`, rollback avant
 visibilité — restent couvertes par les tests du pipeline et ne sont pas prouvables après coup.
@@ -236,6 +245,7 @@ visibilité — restent couvertes par les tests du pipeline et ne sont pas prouv
 ### Phase V1 — Contrats OCR et TAG
 
 - Parseurs indépendants et rapports structurés.
+- Compilation indépendante des regex et reproduction des tags depuis le texte OCR.
 - Une fixture saine et une fixture corrompue pour chaque champ.
 - Tests croisés : tout artefact produit par le pipeline passe l'audit ; des producteurs mutés
   volontairement sont détectés.
@@ -262,7 +272,9 @@ visibilité — restent couvertes par les tests du pipeline et ne sont pas prouv
 3. Modifier le texte OCR sans refaire les tags : `TAG.ocr.sha256` diverge.
 4. Déplacer seulement le TAG sous une autre date : TAG orphelin aux deux emplacements.
 5. Ajouter un tag `confiance:90` : rejet explicite.
-6. Créer un lien symbolique dans chaque racine : chaque cas est rejeté sans suivre la cible.
-7. Corrompre `tripapiers.toml` ou faire chevaucher deux racines : audit interrompu avec code 2.
-8. Créer une entrée de quarantaine sans rapport ou sans original : défaut nommé précisément.
-9. Simuler une erreur de lecture au milieu du parcours : code 3, jamais un faux succès.
+6. Modifier une regex sans refaire le TAG : signalement `stale_rules`.
+7. Modifier un tag ou sa plage de correspondance : la réexécution indépendante détecte l'écart.
+8. Créer un lien symbolique dans chaque racine : chaque cas est rejeté sans suivre la cible.
+9. Corrompre `tripapiers.toml` ou faire chevaucher deux racines : audit interrompu avec code 2.
+10. Créer une entrée de quarantaine sans rapport ou sans original : défaut nommé précisément.
+11. Simuler une erreur de lecture au milieu du parcours : code 3, jamais un faux succès.

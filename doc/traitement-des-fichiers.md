@@ -10,8 +10,9 @@
 ## 1. Objectif et périmètre
 
 `tripapiers` est une application locale de classement documentaire. Un fichier arrive dans
-`INBOX`, reçoit une représentation OCR et un ensemble de tags, puis les trois artefacts sont
-rangés sous des racines séparées :
+`INBOX`, reçoit une représentation OCR, puis les expressions régulières de `tags.yml` lui
+attribuent mécaniquement un ensemble de tags. Les trois artefacts sont rangés sous des racines
+séparées :
 
 - `DOC` contient les octets originaux, sans renommage ;
 - `OCR` contient le texte extrait et les métadonnées de l'extraction ;
@@ -107,8 +108,11 @@ minimum_confidence = 70
 max_pages = 10
 vision_fallback = true
 
-[model]
-name = "claude-opus-5"
+[vision]
+model = "claude-opus-5"
+
+[database]
+path = "tripapiers.db"
 ```
 
 Les chemins relatifs sont résolus depuis le dossier contenant `tripapiers.toml`. Un chemin
@@ -128,13 +132,15 @@ La priorité est : argument CLI, fichier TOML, valeur par défaut.
 --ocr-dir <path>
 --tags-dir <path>
 --config-dir <path>
+--database <path>
 ```
 
 `--root` remplace la base de résolution des valeurs relatives. Les arguments `--*-dir`
 remplacent ensuite une racine précise. La configuration effectivement résolue peut être
 affichée par `tripapiers config show` et validée par `tripapiers config check`.
 
-Les chemins sont normalisés lexicalement, puis vérifiés après canonicalisation du parent
+Le chemin SQLite relatif est résolu selon la même règle que les racines. Les chemins sont
+normalisés lexicalement, puis vérifiés après canonicalisation du parent
 existant. L'application refuse une racine vide, `/`, un lien symbolique comme racine gérée ou
 deux racines pointant vers le même dossier. Les chemins configurés ne peuvent contenir ni
 retour à la ligne ni caractère de contrôle.
@@ -163,7 +169,7 @@ de la sortie, même si `<path>` se trouve physiquement sous l'une d'elles. Sans 
 - `classify /tmp/rapport.pdf.ocr.yml` écrit `/tmp/rapport.pdf.tag.yml`.
 
 `--output` désigne le chemin complet du résultat, nom inclus. `--name` et `--date` sont interdits
-avec `<path>`. Les paramètres OCR, le modèle et les vocabulaires restent chargés depuis la
+avec `<path>`. Les paramètres OCR, les règles et la base SQLite restent chargés depuis la
 configuration ; seuls le routage `DOC/OCR/TAG` et la résolution gérée sont ignorés.
 
 ### 4.2 Mode géré sans `<path>`
@@ -211,8 +217,8 @@ correspondant. Elles n'affichent ni le texte OCR ni la liste des tags. Après tr
 contient uniquement un diagnostic synthétique :
 
 - `extract` : état, chemin du `.ocr.yml`, moteur, langues, confiance locale et taille du texte ;
-- `classify` : état, chemin du `.tag.yml`, modèle et nombres de tags acceptés ou de lignes
-  rejetées.
+- `classify` : état, chemin du `.tag.yml`, empreinte des règles, nombre de regex évaluées et
+  nombre de tags émis.
 
 En cas d'échec, le diagnostic est écrit sur stderr. Il identifie la phase, la classe d'erreur et
 le chemin concerné, sans inclure le contenu documentaire. Le format texte est destiné à
@@ -300,13 +306,24 @@ tripapiers classify --name <filename> --date <YYYY-MM-DD> [--force]
   [--quarantine-on-error]
 ```
 
-La commande lit exclusivement l'artefact OCR, vérifie son schéma et son empreinte, puis envoie
-son champ `text` au modèle avec le vocabulaire rendu depuis `tags.yml`. Le modèle produit une
-liste de tags, un par ligne. Il ne juge pas la qualité OCR et n'émet aucun tag de confiance.
+La commande lit l'artefact OCR, vérifie son schéma et son empreinte, puis retrouve son texte dans
+SQLite par `ocr_sha256`. Elle compile les expressions régulières de `tags.yml`, les applique au
+texte exact et émet les tags dont au moins une règle correspond. Elle n'appelle aucun modèle et
+n'utilise aucun réseau.
 
-Les lignes non conformes sont ignorées, comptées et conservées dans les diagnostics. Les tags
-acceptés sont dédupliqués et triés avant la sérialisation du `.tag.yml`. La commande affiche
-uniquement son diagnostic, jamais les tags eux-mêmes. Tout échec retourne un code non nul.
+Les tags sont dédupliqués, triés et évalués par `evaluation.yml` avant la sérialisation du
+`.tag.yml`. La commande conserve pour chaque tag l'empreinte de la règle et la première plage
+d'octets correspondante. Elle affiche uniquement son diagnostic, jamais le texte, les tags ni
+les extraits correspondants. Une regex invalide est une erreur de configuration et tout échec
+retourne un code non nul.
+
+En mode géré, une classification initiale crée aussi une session de revue `pending` pour le
+nouveau document. Les violations de cardinalité sont alors consignées comme points à résoudre,
+sans faire échouer la commande ni déclencher la quarantaine. Cette insertion SQLite est
+mécanique et n'attend pas l'agent. Une reclassification lancée depuis une session de règles ne
+crée pas récursivement une autre session ; sa publication reste interdite tant qu'une violation
+subsiste. La création est idempotente pour le triplet `(document, ocr_sha256, rules_sha256)`.
+En mode autonome, aucune session n'est créée et les violations restent des erreurs.
 
 ### 5.5 `sort`
 
@@ -331,6 +348,8 @@ Après `take`, la source n'est plus dans `INBOX`. À chaque échec, tous les art
 sont déplacés ensemble dans un dossier de `QUARANTINE/YYYY/MM/DD/`, avec `report.yml`. Le
 traitement continue avec le fichier suivant. La commande retourne `0` seulement si tous les
 fichiers ont atteint l'état `classified` ; sinon elle retourne `1` après avoir traité le lot.
+Une session de règles `pending` n'est pas un échec de classement et ne déclenche pas la
+quarantaine ; elle indique seulement que l'agent doit encore confirmer ou améliorer les regex.
 
 Le script exécutable [`scripts/sort-reference.sh`](../scripts/sort-reference.sh) constitue
 l'implémentation Bash pédagogique de cette composition :
@@ -374,8 +393,28 @@ La suppression accepte les états progressifs `DOC`, `DOC+OCR` et `DOC+OCR+TAG`,
 ensemble orphelin. Elle est transactionnelle : tous les membres présents sont d'abord renommés
 vers un dossier temporaire privé situé sur le même système de fichiers ; ils ne sont effacés
 qu'une fois tous les déplacements réussis. En cas d'échec intermédiaire, le rollback les remet
-en place. `--yes` supprime la confirmation interactive ; `--dry-run` n'effectue aucune mutation.
-Les dossiers de date devenus vides sont retirés jusqu'à leur racine gérée.
+en place. La même transaction retire le texte OCR actif de SQLite ; l'historique conserve
+seulement un identifiant marqué comme supprimé, sans contenu documentaire. `--yes` supprime la
+confirmation interactive ; `--dry-run` n'effectue aucune mutation. Les dossiers de date devenus
+vides sont retirés jusqu'à leur racine gérée.
+
+### 5.7 `rules`
+
+```text
+tripapiers rules begin --name <filename> --date <YYYY-MM-DD>
+tripapiers rules expect --session <id> [--tag <tag>]...
+tripapiers rules check --session <id>
+tripapiers rules run --session <id>
+tripapiers rules diff --session <id> [--format text|json]
+tripapiers rules show --session <id> --document <id> [--full-text]
+tripapiers rules decide --session <id> --change <id> --accept|--reject --reason <text>
+tripapiers rules commit --session <id>
+tripapiers rules abort --session <id>
+```
+
+Ces commandes maintiennent une révision candidate sans modifier la classification acceptée
+avant `commit`. Leur protocole est défini dans
+[`evolution-des-regles.md`](evolution-des-regles.md).
 
 ---
 
@@ -427,151 +466,153 @@ déclenché ce repli ; il n'est pas présenté comme une évaluation de la trans
 Le YAML est UTF-8, utilise LF, n'emploie ni ancres ni alias, et se termine par une seule ligne
 vide. Le texte est conservé intégralement dans le scalaire littéral `text`.
 
+### 6.3 Copie SQLite du texte
+
+Après l'écriture atomique d'un `.ocr.yml`, `extract` insère dans SQLite son texte exact, son
+`ocr_sha256`, l'empreinte du document, le nom et la date d'ajout. Cette règle s'applique aussi au
+mode autonome ; un artefact OCR externe présenté directement à `classify` est validé puis inséré
+avant son classement. Une même empreinte OCR est idempotente et ne duplique pas le texte.
+
+La publication du YAML et de sa ligne SQLite est journalisée. `extract` ne retourne un succès
+qu'après les deux écritures ; après une interruption, la reprise termine l'insertion ou retire
+le YAML non validé.
+
+Le fichier OCR reste l'autorité. Une entrée SQLite absente ou incohérente est reconstruite depuis
+le YAML avant `classify`; une divergence d'empreinte est une erreur et n'est jamais masquée par
+la base. Cette copie rend possible la reclassification rapide de tout le corpus sans reparcourir
+les fichiers YAML à chaque essai de règles.
+
 ---
 
-## 7. Étiquetage
+## 7. Classification mécanique
 
-### 7.1 Grammaire
+### 7.1 Grammaire des tags
 
 ```text
 tag       := segment (":" segment)+
 namespace := premier segment
-role      := deuxième segment, si l'espace de noms en déclare
 value     := segments restants
 ```
 
 Exemples valides :
 
 ```text
-titre:facture-electricite-mars
-date:prin:2024-03-17
-date:aux:2024-02-28
-nom:prin:DUPONT_Marie
-nom:prin:MARTIN_Paul
-nom:aux:BERNARD_Luc
 cat:medecine:ordonnance
+date:prin:2024-03-17
+nom:IVAN_Petrov
+nom:DUPONT_Jean
+titre:ordonnance
 ```
 
-Il n'existe plus de namespace `confiance:`. La confiance est une métadonnée de l'extraction
-locale, stockée uniquement dans `.ocr.yml`.
-
-Bornes non configurables : 6 segments, 200 octets par tag et 200 tags retenus par document.
-Normalisation : `trim`, suppression d'un `:` final, aucune autre réparation.
+Il n'existe pas de namespace `confiance:`. La confiance reste une métadonnée de l'extraction
+locale, stockée uniquement dans `.ocr.yml`. Bornes non configurables : 6 segments, 200 octets
+par tag et 200 tags retenus par document. Aucun tag n'est réparé ou inventé après l'application
+des règles.
 
 ### 7.2 `.CONFIG/tags.yml`
 
+`tags.yml` est une arborescence dont chaque liste non vide est une feuille. Le chemin d'une
+feuille sous la clé racine `tags`, sans inclure cette clé, définit le tag statique émis
+lorsqu'au moins une de ses règles correspond.
+
 ```yaml
-schema_version: 1
-namespaces:
-  - name: titre
-    prompt: |-
-      Un titre court et descriptif, en minuscules sans accents, mots séparés par
-      des tirets.
-      Exemple :
-      titre:facture-electricite-mars
-    cardinality: { min: 1, max: 1 }
-    value_pattern: '^[a-z0-9][a-z0-9-]{0,60}$'
+schema_version: 2
+tags:
+  cat:
+    administration:
+      document:
+        - regexp: '/\b(r[ée]publique\s+fran[çc]aise|service\s+public)\b/i'
+      passeport:
+        - regexp: '/\bpasseport\b/i'
+      titre_de_sejour:
+        - regexp: '/\btitre\s+de\s+s[ée]jour\b/i'
+    assurance:
+      - regexp: '/\b(assurance|assur[ée]|police\s+d.assurance)\b/i'
+    banque:
+      - regexp: '/\b(iban|bic|relev[ée]\s+de\s+compte|banque)\b/i'
+    education:
+      - regexp: '/\b(dipl[oô]me|certificat\s+de\s+scolarit[ée]|universit[ée])\b/i'
+    emploi:
+      - regexp: '/\b(contrat\s+de\s+travail|bulletin\s+de\s+paie|employeur)\b/i'
+    logement:
+      bail:
+        - regexp: '/\b(bail|contrat\s+de\s+location)\b/i'
+      caution:
+        - regexp: '/\b(acte\s+de\s+caution|engagement\s+de\s+garant)\b/i'
+      diagnostic:
+        - regexp: '/\b(diagnostic\s+de\s+performance\s+[ée]nerg[ée]tique|DPE)\b/i'
+      etat_des_lieux:
+        - regexp: '/\b[ée]tat\s+des\s+lieux\b/i'
+      loyer:
+        - regexp: '/\b(quittance\s+de\s+loyer|loyer)\b/i'
+    medecine:
+      analyse:
+        - regexp: '/\b(analyse\s+biologique|r[ée]sultats?\s+d.analyse|laboratoire)\b/i'
+      consultation:
+        - regexp: '/\bconsultation\s+(m[ée]dicale|chez\s+le\s+m[ée]decin)\b/i'
+      honoraire:
+        - regexp: '/\b(note\s+d.honoraires?|honoraires?\s+m[ée]dicaux?)\b/i'
+      ordonnance:
+        - regexp: '/\b(ordonnance|prescription\s+m[ée]dicale)\b/i'
+      suivi:
+        - regexp: '/\b(dossier\s+m[ée]dical|suivi\s+m[ée]dical)\b/i'
+      vaccination:
+        - regexp: '/\b(vaccin|vaccination|certificat\s+de\s+vaccination)\b/i'
+    recherche:
+      - regexp: '/\b(projet\s+de\s+recherche|rapport\s+de\s+recherche|publication\s+scientifique)\b/i'
 
-  - name: date
-    prompt: |-
-      Chaque date portée par le document, au format AAAA-MM-JJ. La date qui
-      caractérise le document porte le rôle prin, les autres aux. Ces dates
-      décrivent le contenu et ne déterminent jamais le dossier de rangement.
-      Si le document représente une liste ou un tableau de dates, par exemple
-      un document financier, ignore les dates des entrées de cette liste :
-      elles ne doivent produire aucun tag date:.
-      Exemple :
-      date:prin:2024-03-17
-    roles: [prin, aux]
-    cardinality: { min: 0, max: 12 }
-    value_pattern: '^\d{4}-\d{2}-\d{2}$'
+  date:
+    prin:
+      - regexp: '/\bdate\s*:\s*(?P<value>\d{4}-\d{2}-\d{2})\b/i'
+        emit: 'date:prin:${value}'
 
-  - name: nom
-    prompt: |-
-      Chaque personne physique concernée, au format NOM_Prenom. Le rôle prin
-      désigne une partie au document ; le rôle aux désigne une personne seulement
-      mentionnée. Un document peut avoir plusieurs personnes principales ou aucune.
-      Si le document représente une liste de personnes, par exemple une liste de
-      participants, ignore les personnes énumérées dans cette liste : elles ne
-      doivent produire aucun tag nom:.
-      Exemples :
-      nom:prin:DUPONT_Marie
-      nom:prin:MARTIN_Paul
-      nom:aux:BERNARD_Luc
-    roles: [prin, aux]
-    cardinality: { min: 0, max: 8 }
-    catalog: persons.yml               # optionnel
+  nom:
+    IVAN_Petrov:
+      - regexp: '/\bIvan\s+Petrov\b/i'
+      - regexp: '/\bPetrov\s+Ivan\b/i'
+    DUPONT_Jean:
+      - regexp: '/\bJean\s+Dupont\b/i'
+      - regexp: '/\bDupont\s+Jean\b/i'
 
-  - name: cat
-    prompt: |-
-      Chaque catégorie applicable au document, parmi les valeurs déclarées
-      ci-dessous. Émets le nom complet de chaque valeur retenue.
-      Exemple :
-      cat:medecine:ordonnance
-    cardinality: { min: 1, max: 8 }
-    values:
-      administration:
-        document: "Document officiel sans type plus précis ci-dessous."
-        passeport: "Passeport et pages officielles associées."
-        titre_de_sejour: "Titre de séjour ou décision relative au séjour."
-      assurance: "Contrat, attestation, garantie ou sinistre d'assurance."
-      banque: "Relevé, paiement, crédit, compte ou correspondance bancaire."
-      education: "Scolarité, diplôme, formation ou enseignement."
-      emploi: "Contrat de travail, salaire ou document professionnel."
-      logement:
-        bail: "Bail ou avenant relatif à un logement."
-        caution: "Acte de caution ou engagement de garant relatif à un logement."
-        diagnostic: "Diagnostic technique d'un logement."
-        etat_des_lieux: "État des lieux d'entrée ou de sortie d'un logement."
-        loyer: "Quittance, échéance ou paiement de loyer."
-      medecine:
-        analyse: "Analyse biologique, imagerie ou examen médical."
-        consultation: "Consultation avec un professionnel de santé."
-        honoraire: "Honoraires ou paiement d'un professionnel de santé."
-        ordonnance: "Prescription de médicament, soin, matériel ou examen."
-        suivi: "Document général de santé, de soins ou de suivi médical."
-        vaccination: "Carnet, certificat ou historique de vaccination."
-      recherche: "Projet, rapport ou publication de recherche."
+  titre:
+    ordonnance:
+      - regexp: '/\b(ordonnance|prescription\s+m[ée]dicale)\b/i'
 ```
 
-Toutes les catégories et leurs consignes résident dans `tags.yml`. Aucun autre fichier de
-catégories n'existe. Sous `cat.values`, une chaîne est une feuille sélectionnable et constitue
-sa description ; un objet est seulement un groupe et ne peut jamais être émis comme tag. Le
-chargeur concatène le namespace `cat` et le chemin de chaque feuille avec `:` : la feuille
-`medecine.ordonnance` devient ainsi `cat:medecine:ordonnance`, tandis que la feuille directe
-`assurance` devient `cat:assurance`.
+Sans `emit`, une correspondance sous `tags.cat.medecine.ordonnance` émet
+`cat:medecine:ordonnance`. `emit` permet un tag dynamique : seules les captures nommées de la
+regex peuvent être interpolées, puis le résultat doit respecter la grammaire et les bornes des
+tags. Une règle dynamique produit une valeur distincte par capture distincte.
 
-Chaque clé respecte `^[a-z][a-z0-9_]*$`. Les listes, objets vides, descriptions vides, clés
-dupliquées et chemins dépassant la borne globale de six segments sont refusés. Un nœud ne peut
-pas être simultanément groupe et feuille. Pour produire le prompt et son empreinte, le chargeur
-parcourt récursivement les clés dans l'ordre lexicographique, développe uniquement les feuilles,
-puis rend chaque tag complet avec sa description sur sa propre ligne.
+Le champ `regexp` emploie la notation `/motif/flags`. Les `/` internes sont échappés par `\/` et
+les seuls flags admis sont `i`, `m`, `s` et `x`, sans doublon. Le moteur Unicode choisi garantit
+un temps linéaire ; les références arrière et les assertions avant ou arrière ne sont donc pas
+acceptées. Les clés YAML respectent `^[A-Za-z0-9][A-Za-z0-9_-]*$`. Les clés dupliquées, groupes
+vides, listes vides, champs inconnus, regex invalides et gabarits `emit` sans capture déclarée
+sont des erreurs de configuration. Un motif ne peut pas correspondre à la chaîne vide ni
+dépasser 4 096 octets ; sa taille compilée est bornée à 10 Mio.
 
-### 7.3 Requête `classify`
+Les règles d'une même feuille sont un OU logique. Les groupes ne sont jamais des tags. Le
+chargeur trie les chemins, puis les couples `(regexp, emit)` avant de produire l'empreinte
+canonique `rules_sha256`; l'ordre écrit dans YAML n'influence donc ni le résultat ni l'empreinte.
 
-Le prompt système contient le préambule fixe, le rendu déterministe de `tags.yml` et le format :
+### 7.3 Algorithme de `classify`
 
-```text
-Tu reçois le texte extrait d'un document. Émets uniquement les tags justifiés par ce texte.
+1. Charger, valider et compiler toute la révision de `tags.yml`.
+2. Résoudre l'artefact OCR et vérifier sa copie SQLite par `ocr_sha256`.
+3. Appliquer toutes les regex au texte UTF-8 exact, sans prétraitement supplémentaire.
+4. Émettre le chemin statique ou développer le gabarit `emit` pour chaque correspondance.
+5. Dédupliquer et trier les tags ; pour leur provenance, retenir la première plage d'octets,
+   puis la plus petite empreinte de règle en cas d'égalité.
+6. Appliquer les cardinalités d'`evaluation.yml` et écrire le `.tag.yml` atomiquement.
 
-FORMAT DE SORTIE — impératif :
-- une ligne = un tag, rien d'autre
-- aucune prose, puce, numérotation ou balise de code
-- n'invente aucune valeur
-- si tu hésites, omets la valeur
-
-TAGS DISPONIBLES :
-<rendu déterministe de tags.yml>
-```
-
-La qualité de l'OCR et son score ne figurent pas parmi les tâches du modèle. Le texte et le
-prompt peuvent inclure les métadonnées utiles, mais jamais une instruction demandant une
-estimation de confiance.
+Une même entrée et les mêmes empreintes OCR et `tags.yml` produisent toujours les mêmes tags.
+`classify` ne possède aucun client de modèle et ne fait aucun appel réseau.
 
 ### 7.4 Contrat `.tag.yml`
 
 ```yaml
-schema_version: 1
+schema_version: 2
 source:
   filename: fichier-original.pdf
   sha256: "sha256:9f86d081..."
@@ -580,19 +621,51 @@ ocr:
   sha256: "sha256:2f77668a..."          # empreinte du fichier .ocr.yml
 classification:
   created_at: "2026-08-16T14:32:12+02:00"
-  model: claude-opus-5
-  prompt_sha256: "sha256:68c46e84..."
+  engine: regexp
+  engine_version: "regex-1"
+  rules_sha256: "sha256:68c46e84..."
+  run_id: 42
+  review_status: pending              # pending | accepted
 tags:
   - cat:medecine:ordonnance
   - date:prin:2024-03-17
-  - nom:prin:DUPONT_Marie
-  - titre:ordonnance-antibiotiques
+  - nom:IVAN_Petrov
+  - titre:ordonnance
+matches:
+  - tag: cat:medecine:ordonnance
+    rule_sha256: "sha256:a5ab10..."
+    start_byte: 18
+    end_byte: 28
+  - tag: date:prin:2024-03-17
+    rule_sha256: "sha256:b6bc21..."
+    start_byte: 42
+    end_byte: 58
+  - tag: nom:IVAN_Petrov
+    rule_sha256: "sha256:c7cd32..."
+    start_byte: 72
+    end_byte: 83
+  - tag: titre:ordonnance
+    rule_sha256: "sha256:d8de43..."
+    start_byte: 18
+    end_byte: 28
 diagnostics:
-  rejected_lines: 0
+  regex_evaluated: 25
+  regex_matched: 4
+  tags_emitted: 4
+  evaluation_issues: []
 ```
 
-Les tags sont triés lexicographiquement. Le fichier ne duplique ni le texte OCR ni la confiance
-locale : son empreinte `ocr.sha256` lie sans ambiguïté la classification à l'artefact OCR.
+Les tags et les entrées `matches` sont triés lexicographiquement. Une entrée `matches` est
+conservée par tag et ne contient aucun extrait du document. Le fichier ne duplique ni le texte
+OCR ni la confiance locale : son empreinte `ocr.sha256` lie sans ambiguïté la classification à
+l'artefact OCR.
+
+### 7.5 Évolution des règles
+
+Un agent peut proposer des regex, mais il ne peut pas affecter directement les tags. Chaque
+candidate est appliquée à l'ensemble de l'instantané SQLite et comparée à la dernière révision
+acceptée. La boucle, les décisions de régression et la publication transactionnelle sont
+définies dans [`evolution-des-regles.md`](evolution-des-regles.md).
 
 ---
 
@@ -606,32 +679,29 @@ schema_version: 1
 required:
   - { namespace: titre, min: 1, max: 1 }
   - { namespace: date, role: prin, min: 0, max: 1 }
-  - { namespace: nom, role: prin, min: 0 }
+  - { namespace: nom, min: 0, max: 8 }
   - { namespace: cat, min: 1, max: 8 }
 
 ocr:
   minimum_confidence: 70
 
-unknown_values:
-  cat: reject
-  nom: propose
-
-parse_quality:
-  max_rejected_ratio: 0.5
-
 on_failure:
   low_ocr_confidence: error
-  parse_quality: error
   missing_required: error
-  unknown_value: error
+  cardinality_violation: error
+
+pending_review:
+  missing_required: allow
+  cardinality_violation: allow
 ```
 
 Le seuil OCR est appliqué à `ocr.confidence.value` avant `classify`. Il ne s'agit pas d'un tag.
 Si un repli vision est activé, la politique peut autoriser la classification malgré un score
 local inférieur au seuil en exigeant `vision_fallback_used: true`. L'évaluation retourne un
-échec à l'appelant ; elle ne déplace elle-même aucun fichier. En mode autonome ou lors d'un appel
-géré direct, l'entrée reste en place. Seule `sort` transforme cet échec en déplacement vers
-`QUARANTINE`.
+échec à l'appelant hors classification initiale en attente de revue ; elle ne déplace elle-même
+aucun fichier. En mode autonome ou lors d'un appel géré direct sans
+`--quarantine-on-error`, l'entrée reste en place. `sort` transforme les véritables échecs en
+déplacement vers `QUARANTINE`, mais conserve l'état `pending` prévu par la politique ci-dessus.
 
 ### 8.2 Disposition de `QUARANTINE`
 
@@ -646,14 +716,15 @@ QUARANTINE/
 ```
 
 Les YAML restent à côté du document dans son dossier de quarantaine. `report.yml` contient la
-phase en échec, les raisons typées, les chemins cibles prévus, les empreintes, le modèle
-éventuellement appelé et les lignes rejetées. Aucun élément de quarantaine n'est confondu avec
-un triplet rangé.
+phase en échec, les raisons typées, les chemins cibles prévus, les empreintes, le moteur OCR
+éventuellement appelé, l'empreinte des règles et les regex responsables. Aucun élément de
+quarantaine n'est confondu avec un triplet rangé.
 
 Lorsqu'elle est pilotée par `sort`, toute classe d'échec — résultat invalide, panne HTTP, manque
 d'espace ou erreur d'outil — déplace les artefacts alors disponibles vers cette disposition.
-Lorsqu'`extract` ou `classify` est appelée directement, elle ne met rien en quarantaine : elle
-préserve son entrée, retire tout résultat temporaire et retourne un code non nul.
+Lorsqu'`extract` ou `classify` est appelée directement sans `--quarantine-on-error`, elle ne met
+rien en quarantaine : elle préserve son entrée, retire tout résultat temporaire et retourne un
+code non nul.
 
 ---
 
@@ -662,6 +733,10 @@ préserve son entrée, retire tout résultat temporaire et retourne un code non 
 - Un verrou `flock` unique protège `take`, `sort` et `remove`.
 - `extract` et `classify` prennent le verrou lorsqu'elles sont invoquées sans `<path>` en mode
   géré. Le mode autonome ne verrouille que son fichier de sortie.
+- `rules commit` prend le verrou global ; les essais et la revue utilisent un instantané SQLite
+  sans conserver ce verrou pendant le travail de l'agent.
+- SQLite utilise le mode WAL avec un seul écrivain. La base, `-wal` et `-shm` sont créés avec le
+  mode `0600`; `secure_delete` est activé et `remove` termine par un checkpoint tronqué.
 - Chaque écriture YAML utilise temporaire adjacent, `fsync`, puis `rename`.
 - `sort` applique `take`, `extract` et `classify` dans un staging privé, puis valide en une fois
   le triplet classé ou l'ensemble mis en quarantaine.
@@ -670,15 +745,16 @@ préserve son entrée, retire tout résultat temporaire et retourne un code non 
 - Les inventaires sont bornés au dossier attendu ; aucune recherche récursive implicite.
 - `remove` refuse toute résolution qui sort des racines ou forme un ensemble orphelin.
 
-État durable hors du dépôt, sous `$XDG_STATE_HOME/tripapiers/` :
+État durable hors du dépôt, par défaut sous `$XDG_STATE_HOME/tripapiers/` :
 
 ```text
-executions.db
+tripapiers.db
 tripapiers.lock
 journal/
 ```
 
-Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent les autorités.
+Le chemin de `tripapiers.db` peut être remplacé par la configuration ou `--database`. Aucun état
+interne ne remplace les fichiers `DOC`, `OCR`, `TAG` et `tags.yml`, qui restent les autorités.
 
 ---
 
@@ -694,18 +770,23 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 7. Une date trouvée dans le document ne détermine jamais son chemin physique.
 8. Aucune vue par raccourci ou lien symbolique n'est créée.
 9. Les chemins configurés sont résolus avec la priorité CLI → TOML → défauts.
-10. Toute ligne de tag non conforme est ignorée, jamais réparée.
+10. Chaque tag provient d'une regex compilée de `tags.yml`; `classify` n'en invente et n'en
+    répare aucun.
 11. Tout échec d'une étape de `sort` déplace ensemble les artefacts disponibles dans
     `QUARANTINE`.
 12. Sans `--quarantine-on-error`, `take` laisse la source à sa place s'il échoue ; après une
     prise en charge réussie, elle la retire.
 13. `remove` supprime tous les membres présents d'un ensemble cohérent ou n'en supprime aucun.
-14. Toutes les catégories configurées sont des feuilles de l'arborescence `tags.yml` ; ses
-    groupes ne sont jamais des tags valides.
+14. Toutes les catégories configurées sont des feuilles de règles de l'arborescence `tags.yml` ;
+    ses groupes ne sont jamais des tags valides.
 15. Les commandes, arguments, clés de configuration et valeurs d'état sont en anglais.
 16. Avec `<path>`, `extract` et `classify` ignorent toujours le routage `DOC/OCR/TAG`.
 17. Sans `<path>`, `extract`, `classify` et `remove` exigent `--name` et `--date`.
 18. `remove` n'accepte jamais d'argument positionnel.
+19. Chaque texte OCR possède une copie SQLite liée par l'empreinte du `.ocr.yml`.
+20. Une révision de règles ne devient active qu'après reclassification et revue de tout
+    l'instantané du corpus.
+21. À empreintes OCR et de règles identiques, la classification est identique.
 
 ---
 
@@ -720,17 +801,21 @@ tripapiers/
 │   ├── core/        # contrats OCR/TAG, empreintes et résolution des triplets
 │   ├── config/      # tripapiers.toml, tags.yml, evaluation.yml
 │   ├── extract/     # OCR locale, métriques et repli vision
-│   ├── classify/    # rendu du prompt, client LLM et analyse des lignes
+│   ├── classify/    # compilation des regex, affectation et provenance des tags
+│   ├── rules/       # sessions agent, différences, décisions et publication
+│   ├── database/    # textes OCR, révisions et classifications SQLite
 │   ├── store/       # chemins, écritures atomiques, transactions et suppression
 │   ├── pipeline/    # orchestration de sort et quarantaine
-│   ├── cli/         # inbox, take, extract, classify, sort, remove, config
+│   ├── cli/         # inbox, take, extract, classify, sort, remove, rules, config
 │   └── verify/      # composant optionnel et indépendant
 └── tests/fixtures/
 ```
 
-`core`, `config` et l'analyseur de tags ne dépendent d'aucun réseau. `extract` expose un trait
-pour substituer les outils OCR dans les tests ; `classify` expose un trait pour substituer le
-modèle. `sort` compose exactement ces deux services au lieu de réimplémenter leur logique.
+`core`, `config` et `classify` ne dépendent d'aucun réseau. `extract` expose un trait pour
+substituer les outils OCR dans les tests. Le client de modèle éventuel appartient uniquement au
+repli vision et à l'agent du crate `rules`; il n'est pas une dépendance de `classify`. `sort`
+compose exactement les services d'extraction et de classification au lieu de réimplémenter leur
+logique.
 
 ---
 
@@ -741,8 +826,9 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Parseur de `tripapiers.toml` et priorité des chemins.
 - Types `DocumentRef`, `OcrArtifact`, `TagArtifact`, `ManagedTriplet`.
 - Validation des noms, dates, racines et empreintes croisées.
-- Chargement de l'arborescence `tags.yml`, développement déterministe de ses feuilles et
-  chargement d'`evaluation.yml` ; instantané du prompt rendu.
+- Chargement de l'arborescence `tags.yml`, compilation et empreinte canonique de ses regex ;
+  chargement d'`evaluation.yml`.
+- Schéma SQLite, migrations et reconstruction depuis les artefacts visibles.
 
 ### Phase 1 — `inbox`, `take`, `extract` et `classify`
 
@@ -750,11 +836,18 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Ajout transactionnel dans `DOC`, avec remplacement facultatif du nom et de la date.
 - OCR PDF/images, métriques locales et sérialisation `.ocr.yml`.
 - Repli vision optionnel sans estimation de confiance par le modèle.
-- Étiquetage ligne par ligne et sérialisation `.tag.yml`.
+- Copie de chaque texte OCR dans SQLite avec vérification d'empreinte.
+- Classification mécanique, provenance des correspondances et sérialisation `.tag.yml`.
 - Sélection syntaxique du mode autonome ou géré, `--output`, diagnostics et codes de sortie.
 - Mise en quarantaine commune avec `--quarantine-on-error` en mode géré.
 
-### Phase 2 — `sort` et `QUARANTINE`
+### Phase 2 — évolution des règles
+
+- Sessions candidates, compilation et classification de l'instantané complet.
+- Différences par document, décisions de l'agent et invalidation après chaque modification.
+- Publication transactionnelle de `tags.yml`, des `.tag.yml` modifiés et de la révision SQLite.
+
+### Phase 3 — `sort` et `QUARANTINE`
 
 - Inventaire borné d'`INBOX`, transactions et verrou.
 - Composition séquentielle `take` → `extract` → `classify`.
@@ -762,13 +855,13 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Tests de conformité entre le script Bash de référence et la commande native sur les mêmes
   scénarios sans interruption.
 
-### Phase 3 — `remove`
+### Phase 4 — `remove`
 
 - Résolution sûre des trois fichiers.
 - `--dry-run`, confirmation et `--yes`.
 - Suppression transactionnelle et nettoyage des dossiers vides.
 
-### Phase 4 — Empaquetage
+### Phase 5 — Empaquetage
 
 - Tests d'intégration, page de manuel, complétions shell et unité systemd facultative pour
   appeler `sort` périodiquement.
@@ -784,24 +877,28 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
    doublon exact et conflit de contenu.
 3. **Extraction** — PDF natif, scan propre, scan bruité, image, document vide, PDF corrompu et
    document dépassant `max_pages`.
-4. **Confiance** — vérifier que le même OCR local produit le même score et qu'aucun prompt de
-   `classify` ne demande une confiance au modèle.
-5. **Classification** — feuilles directes et imbriquées de `cat.values`, rejet des groupes et
-   des arbres invalides, rendu déterministe, prose, puces, tags inconnus, doublons, lignes
-   tronquées et listes de dates ou de personnes qui ne doivent pas saturer les tags.
-6. **Modes** — prouver qu'un `<path>` impose toujours la sortie adjacente ou `--output`, même
+4. **Confiance** — vérifier que le même OCR local produit le même score et que `classify`
+   n'appelle aucun modèle ni réseau.
+5. **Regex** — feuilles statiques et dynamiques, captures `emit`, flags, Unicode, règles
+   invalides, groupes non sélectionnables, déduplication et ordre déterministe.
+6. **SQLite** — insertion idempotente de tous les textes OCR, divergence d'empreinte et
+   reconstruction complète depuis les YAML.
+7. **Régression** — règle ciblée, règle trop large, ajout et suppression de tags anciens,
+   décisions invalidées après modification et corpus rendu obsolète pendant la revue.
+8. **Modes** — prouver qu'un `<path>` impose toujours la sortie adjacente ou `--output`, même
    sous une racine gérée, et que son absence exige `--name` avec `--date`.
-7. **Affichage** — diagnostic seul sur stdout en cas de succès et sur stderr en cas d'échec ;
+9. **Affichage** — diagnostic seul sur stdout en cas de succès et sur stderr en cas d'échec ;
    absence du texte OCR et des tags ; codes non nuls pour chaque classe d'échec.
-8. **Rangement** — vérifier l'inventaire de `inbox`, puis injecter un échec dans `take`,
+10. **Rangement** — vérifier l'inventaire de `inbox`, puis injecter un échec dans `take`,
    `extract` et `classify` avec `--quarantine-on-error` et vérifier les artefacts exacts déplacés
    dans `QUARANTINE`.
-9. **Équivalence** — exécuter le script Bash et `sort` sur deux copies du même corpus sans
+11. **Équivalence** — exécuter le script Bash et `sort` sur deux copies du même corpus sans
    interruption, puis comparer `DOC`, `OCR`, `TAG`, `QUARANTINE`, diagnostics et codes de sortie.
-10. **Transaction** — interrompre `sort` à chaque transition et vérifier qu'aucun staging n'est
+12. **Transaction** — interrompre `sort` à chaque transition et vérifier qu'aucun staging n'est
     visible ; documenter que ce test ne s'applique pas au script de référence.
-11. **Quarantaine** — vérifier la présence des artefacts disponibles et du rapport.
-12. **Suppression** — états `DOC`, `DOC+OCR`, `DOC+OCR+TAG`, ensemble orphelin et panne injectée à
+13. **Quarantaine** — vérifier la présence des artefacts disponibles et du rapport.
+14. **Suppression** — états `DOC`, `DOC+OCR`, `DOC+OCR+TAG`, ensemble orphelin et panne injectée à
    chaque déplacement temporaire.
-13. **Concurrence** — deux `sort` simultanés et conflit `sort`/`remove`.
-14. **Reprise** — interruption à chaque étape, puis reprise sans ensemble orphelin.
+15. **Concurrence** — deux `sort` simultanés, conflit `sort`/`remove` et deux sessions de règles.
+16. **Reprise** — interruption à chaque étape, puis reprise sans ensemble orphelin ni mélange de
+    deux empreintes de règles.
