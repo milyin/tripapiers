@@ -449,7 +449,7 @@ date:aux:2024-02-28
 nom:prin:DUPONT_Marie
 nom:prin:MARTIN_Paul
 nom:aux:BERNARD_Luc
-cat:ordonnance
+cat:medecine:ordonnance
 ```
 
 Il n'existe plus de namespace `confiance:`. La confiance est une métadonnée de l'extraction
@@ -507,31 +507,34 @@ namespaces:
       Chaque catégorie applicable au document, parmi les valeurs déclarées
       ci-dessous. Émets le nom complet de chaque valeur retenue.
       Exemple :
-      cat:ordonnance
+      cat:medecine:ordonnance
     cardinality: { min: 1, max: 8 }
     values:
+      - { name: cat:administration:document, description: "Documents officiels d'une administration publique sans type plus précis ci-dessous." }
+      - { name: cat:administration:passeport, description: "Passeports et pages officielles associées." }
+      - { name: cat:administration:titre_de_sejour, description: "Titres de séjour et décisions relatives au séjour." }
       - { name: cat:assurance, description: "Contrats, attestations, garanties et sinistres d'assurance." }
       - { name: cat:banque, description: "Relevés, paiements, crédits, comptes et correspondances bancaires." }
-      - { name: cat:caution, description: "Actes de caution et engagements de garant." }
-      - { name: cat:consultation, description: "Consultations avec un professionnel de santé." }
-      - { name: cat:diagnostic, description: "Diagnostics techniques d'un logement." }
       - { name: cat:education, description: "Scolarité, diplômes, formations et enseignement." }
       - { name: cat:emploi, description: "Contrats de travail, salaires et documents professionnels." }
-      - { name: cat:gouvernement, description: "Documents officiels d'une administration publique." }
-      - { name: cat:honoraires, description: "Honoraires et paiements de professionnels de santé." }
-      - { name: cat:loyer, description: "Quittances, échéances et paiements de loyer." }
-      - { name: cat:logement, description: "Baux, états des lieux et documents de logement." }
-      - { name: cat:medecine, description: "Santé, soins et suivi médical." }
-      - { name: cat:analyse, description: "Analyses biologiques, imagerie et examens médicaux." }
-      - { name: cat:ordonnance, description: "Prescriptions de médicaments, soins, matériel ou examens." }
-      - { name: cat:passeport, description: "Passeports et pages officielles associées." }
+      - { name: cat:logement:bail, description: "Baux et avenants relatifs à un logement." }
+      - { name: cat:logement:caution, description: "Actes de caution et engagements de garant relatifs à un logement." }
+      - { name: cat:logement:diagnostic, description: "Diagnostics techniques d'un logement." }
+      - { name: cat:logement:etat_des_lieux, description: "États des lieux d'entrée ou de sortie d'un logement." }
+      - { name: cat:logement:loyer, description: "Quittances, échéances et paiements de loyer." }
+      - { name: cat:medecine:analyse, description: "Analyses biologiques, imagerie et examens médicaux." }
+      - { name: cat:medecine:consultation, description: "Consultations avec un professionnel de santé." }
+      - { name: cat:medecine:honoraire, description: "Honoraires et paiements de professionnels de santé." }
+      - { name: cat:medecine:ordonnance, description: "Prescriptions de médicaments, soins, matériel ou examens." }
+      - { name: cat:medecine:suivi, description: "Documents généraux de santé, de soins et de suivi médical sans type plus précis ci-dessus." }
+      - { name: cat:medecine:vaccination, description: "Carnets, certificats et historiques de vaccination." }
       - { name: cat:recherche, description: "Projets, rapports et publications de recherche." }
-      - { name: cat:titre_de_sejour, description: "Titres de séjour et décisions relatives au séjour." }
-      - { name: cat:vaccination, description: "Carnets, certificats et historiques de vaccination." }
 ```
 
 Toutes les catégories et leurs consignes résident dans `tags.yml`. Aucun autre fichier de
-catégories n'existe.
+catégories n'existe. Lorsqu'un domaine possède plusieurs types, le tag prend la forme
+`cat:<domaine>:<type>` et le parent seul n'est pas une valeur valide. Les domaines sans
+sous-catégorie utile conservent la forme `cat:<domaine>`.
 
 ### 7.3 Requête `classify`
 
@@ -569,7 +572,7 @@ classification:
   model: claude-opus-5
   prompt_sha256: "sha256:68c46e84..."
 tags:
-  - cat:ordonnance
+  - cat:medecine:ordonnance
   - date:prin:2024-03-17
   - nom:prin:DUPONT_Marie
   - titre:ordonnance-antibiotiques
