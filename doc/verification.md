@@ -106,7 +106,7 @@ Pour `TAG/YYYY/MM/DD/<filename>.tag.yml` :
 | Modèle | identifiant non vide et horodatage analysable |
 | Prompt | empreinte recalculée depuis `tags.yml` lorsqu'il s'agit de la version courante |
 | Grammaire | segments, rôles, casse et bornes dures respectés |
-| Valeurs | expressions régulières et valeurs fermées de `tags.yml` respectées |
+| Valeurs | tag présent parmi les feuilles développées de l'arborescence `tags.yml` |
 | Cardinalités | règles de `tags.yml` et `evaluation.yml` satisfaites |
 | Ordre | tags triés lexicographiquement et sans doublon |
 | Confiance | aucun namespace `confiance:` présent |
@@ -220,7 +220,7 @@ en CI.
 | 11 | échec de `sort` déplaçant les artefacts disponibles | audit de l'entrée et du rapport |
 | 12 | échec de `take` préservant la source sans option de quarantaine | propriété d'exécution |
 | 13 | suppression tout ou rien des membres présents | absence de nouvel état orphelin |
-| 14 | catégories dans `tags.yml` | validation des valeurs fermées |
+| 14 | catégories dans `tags.yml` | validation de l'arborescence et de ses feuilles développées |
 | 15 | interface configurable en anglais | tests CLI et schéma TOML |
 | 16 | `<path>` imposant le mode autonome | tests CLI d'intégration |
 | 17 | mode géré exigeant nom et date | tests CLI d'invocation |

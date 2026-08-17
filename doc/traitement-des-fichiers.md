@@ -510,31 +510,42 @@ namespaces:
       cat:medecine:ordonnance
     cardinality: { min: 1, max: 8 }
     values:
-      - { name: cat:administration:document, description: "Documents officiels d'une administration publique sans type plus précis ci-dessous." }
-      - { name: cat:administration:passeport, description: "Passeports et pages officielles associées." }
-      - { name: cat:administration:titre_de_sejour, description: "Titres de séjour et décisions relatives au séjour." }
-      - { name: cat:assurance, description: "Contrats, attestations, garanties et sinistres d'assurance." }
-      - { name: cat:banque, description: "Relevés, paiements, crédits, comptes et correspondances bancaires." }
-      - { name: cat:education, description: "Scolarité, diplômes, formations et enseignement." }
-      - { name: cat:emploi, description: "Contrats de travail, salaires et documents professionnels." }
-      - { name: cat:logement:bail, description: "Baux et avenants relatifs à un logement." }
-      - { name: cat:logement:caution, description: "Actes de caution et engagements de garant relatifs à un logement." }
-      - { name: cat:logement:diagnostic, description: "Diagnostics techniques d'un logement." }
-      - { name: cat:logement:etat_des_lieux, description: "États des lieux d'entrée ou de sortie d'un logement." }
-      - { name: cat:logement:loyer, description: "Quittances, échéances et paiements de loyer." }
-      - { name: cat:medecine:analyse, description: "Analyses biologiques, imagerie et examens médicaux." }
-      - { name: cat:medecine:consultation, description: "Consultations avec un professionnel de santé." }
-      - { name: cat:medecine:honoraire, description: "Honoraires et paiements de professionnels de santé." }
-      - { name: cat:medecine:ordonnance, description: "Prescriptions de médicaments, soins, matériel ou examens." }
-      - { name: cat:medecine:suivi, description: "Documents généraux de santé, de soins et de suivi médical sans type plus précis ci-dessus." }
-      - { name: cat:medecine:vaccination, description: "Carnets, certificats et historiques de vaccination." }
-      - { name: cat:recherche, description: "Projets, rapports et publications de recherche." }
+      administration:
+        document: "Document officiel sans type plus précis ci-dessous."
+        passeport: "Passeport et pages officielles associées."
+        titre_de_sejour: "Titre de séjour ou décision relative au séjour."
+      assurance: "Contrat, attestation, garantie ou sinistre d'assurance."
+      banque: "Relevé, paiement, crédit, compte ou correspondance bancaire."
+      education: "Scolarité, diplôme, formation ou enseignement."
+      emploi: "Contrat de travail, salaire ou document professionnel."
+      logement:
+        bail: "Bail ou avenant relatif à un logement."
+        caution: "Acte de caution ou engagement de garant relatif à un logement."
+        diagnostic: "Diagnostic technique d'un logement."
+        etat_des_lieux: "État des lieux d'entrée ou de sortie d'un logement."
+        loyer: "Quittance, échéance ou paiement de loyer."
+      medecine:
+        analyse: "Analyse biologique, imagerie ou examen médical."
+        consultation: "Consultation avec un professionnel de santé."
+        honoraire: "Honoraires ou paiement d'un professionnel de santé."
+        ordonnance: "Prescription de médicament, soin, matériel ou examen."
+        suivi: "Document général de santé, de soins ou de suivi médical."
+        vaccination: "Carnet, certificat ou historique de vaccination."
+      recherche: "Projet, rapport ou publication de recherche."
 ```
 
 Toutes les catégories et leurs consignes résident dans `tags.yml`. Aucun autre fichier de
-catégories n'existe. Lorsqu'un domaine possède plusieurs types, le tag prend la forme
-`cat:<domaine>:<type>` et le parent seul n'est pas une valeur valide. Les domaines sans
-sous-catégorie utile conservent la forme `cat:<domaine>`.
+catégories n'existe. Sous `cat.values`, une chaîne est une feuille sélectionnable et constitue
+sa description ; un objet est seulement un groupe et ne peut jamais être émis comme tag. Le
+chargeur concatène le namespace `cat` et le chemin de chaque feuille avec `:` : la feuille
+`medecine.ordonnance` devient ainsi `cat:medecine:ordonnance`, tandis que la feuille directe
+`assurance` devient `cat:assurance`.
+
+Chaque clé respecte `^[a-z][a-z0-9_]*$`. Les listes, objets vides, descriptions vides, clés
+dupliquées et chemins dépassant la borne globale de six segments sont refusés. Un nœud ne peut
+pas être simultanément groupe et feuille. Pour produire le prompt et son empreinte, le chargeur
+parcourt récursivement les clés dans l'ordre lexicographique, développe uniquement les feuilles,
+puis rend chaque tag complet avec sa description sur sa propre ligne.
 
 ### 7.3 Requête `classify`
 
@@ -689,7 +700,8 @@ Aucun état interne ne remplace les fichiers `DOC`, `OCR` et `TAG`, qui restent 
 12. Sans `--quarantine-on-error`, `take` laisse la source à sa place s'il échoue ; après une
     prise en charge réussie, elle la retire.
 13. `remove` supprime tous les membres présents d'un ensemble cohérent ou n'en supprime aucun.
-14. Toutes les catégories configurées résident dans `tags.yml`.
+14. Toutes les catégories configurées sont des feuilles de l'arborescence `tags.yml` ; ses
+    groupes ne sont jamais des tags valides.
 15. Les commandes, arguments, clés de configuration et valeurs d'état sont en anglais.
 16. Avec `<path>`, `extract` et `classify` ignorent toujours le routage `DOC/OCR/TAG`.
 17. Sans `<path>`, `extract`, `classify` et `remove` exigent `--name` et `--date`.
@@ -729,7 +741,8 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
 - Parseur de `tripapiers.toml` et priorité des chemins.
 - Types `DocumentRef`, `OcrArtifact`, `TagArtifact`, `ManagedTriplet`.
 - Validation des noms, dates, racines et empreintes croisées.
-- Chargement de `tags.yml` et `evaluation.yml` ; instantané du prompt rendu.
+- Chargement de l'arborescence `tags.yml`, développement déterministe de ses feuilles et
+  chargement d'`evaluation.yml` ; instantané du prompt rendu.
 
 ### Phase 1 — `inbox`, `take`, `extract` et `classify`
 
@@ -773,8 +786,9 @@ modèle. `sort` compose exactement ces deux services au lieu de réimplémenter 
    document dépassant `max_pages`.
 4. **Confiance** — vérifier que le même OCR local produit le même score et qu'aucun prompt de
    `classify` ne demande une confiance au modèle.
-5. **Classification** — prose, puces, tags inconnus, doublons, lignes tronquées et listes de
-   dates ou de personnes qui ne doivent pas saturer les tags.
+5. **Classification** — feuilles directes et imbriquées de `cat.values`, rejet des groupes et
+   des arbres invalides, rendu déterministe, prose, puces, tags inconnus, doublons, lignes
+   tronquées et listes de dates ou de personnes qui ne doivent pas saturer les tags.
 6. **Modes** — prouver qu'un `<path>` impose toujours la sortie adjacente ou `--output`, même
    sous une racine gérée, et que son absence exige `--name` avec `--date`.
 7. **Affichage** — diagnostic seul sur stdout en cas de succès et sur stderr en cas d'échec ;
