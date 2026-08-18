@@ -64,6 +64,11 @@ chemins est également valide. Les noms sont contrôlés séparément : le nom d
 n'a pas à disparaître lorsque ce chemin est détaché, et un alias n'a pas à correspondre à un
 chemin existant.
 
+Après `file add`, le chemin doit référencer le SHA des octets lus au cours de cette commande. Un
+ancien rattachement du même chemin à un autre SHA a été remplacé atomiquement ; son existence
+dans un historique ou une sauvegarde n'est pas une incohérence. L'ancienne entrée et ses noms
+peuvent légitimement rester sans chemin.
+
 La vérification protège contre le remplacement concurrent : elle relève les métadonnées avant
 et après la lecture et signale `changed_during_read` si elles diffèrent. Elle ne promet toutefois
 pas de verrouiller un fichier administré par un autre programme.

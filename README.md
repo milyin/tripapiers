@@ -43,6 +43,11 @@ tripapiers file detach /Downloads/impot_2022.pdf
 Les deux noms restent enregistrés après le détachement. Ils se gèrent indépendamment avec
 `file name add` et `file name remove`.
 
+`file add` est une opération de convergence : elle ne produit jamais de conflit parce que le
+chemin est déjà connu. Elle crée l'entrée correspondant aux octets si nécessaire, puis rattache
+le chemin à cette entrée. Si le chemin désignait auparavant un autre SHA, sa référence est
+remplacée atomiquement.
+
 ## Interface prévue
 
 ```text

@@ -34,9 +34,11 @@ aussi le nom de base du chemin à l'ensemble des noms. Par exemple, le même SHA
 noms `impot_2022.pdf` et `Jean_dupont_impot.pdf`, indépendamment des chemins
 `/Downloads/impot_2022.pdf` et `/Documents/Jean_dupont_impot.pdf`.
 
-Si un chemin déjà rattaché désigne de nouveaux octets, `file add` échoue avec `path_conflict` :
-il faut d'abord exécuter `file detach`, puis ajouter le nouveau contenu. La base ne suit ni inode
-ni lien symbolique.
+`file add` ne produit aucun conflit lorsqu'un chemin est déjà rattaché. Après lecture des octets,
+elle crée l'entrée du SHA si celui-ci est inconnu ou réutilise l'entrée existante, puis rattache
+le chemin à ce SHA. Si le chemin référençait auparavant un autre contenu, son rattachement est
+remplacé dans la même transaction. L'ancienne entrée reste dans la base, éventuellement sans
+chemin, et conserve tous ses noms. La base ne suit ni inode ni lien symbolique.
 
 ### 2.2 Chemins
 
@@ -139,8 +141,15 @@ tripapiers file remove --sha <sha> [--yes]
 ```
 
 `file add` lit le fichier, calcule son empreinte et sa taille, crée l'entrée si nécessaire,
-puis rattache le chemin et ajoute son nom de base à l'ensemble des noms. Répéter l'opération sur
-le même couple contenu-chemin est idempotent et garantit que ce nom est présent.
+puis rattache le chemin et ajoute son nom de base à l'ensemble des noms de l'entrée cible. Si le
+SHA existe déjà, elle se comporte comme un rattachement à cette entrée. Si le chemin était lié à
+un autre SHA, elle remplace ce seul lien ; elle ne retire ni l'ancienne entrée ni aucun de ses
+noms. Répéter l'opération sur le même couple contenu-chemin est idempotent et garantit que ce nom
+est présent.
+
+Ainsi, `file add` n'échoue jamais pour la seule raison que le chemin est connu ou que son contenu
+a changé. Elle peut toujours échouer avant la mutation si le fichier est absent ou illisible, ou
+si SQLite ne peut pas valider la transaction.
 
 `file attach` rattache à une entrée existante un autre chemin dont le contenu doit avoir le SHA
 annoncé ; elle ajoute également son nom de base. `file detach` retire un chemin même si le
@@ -325,7 +334,7 @@ emploie l'API de sauvegarde SQLite afin de produire un instantané cohérent.
 | `1` | contenu, règle ou invariant invalide |
 | `2` | invocation ou configuration invalide |
 | `3` | panne d'entrée-sortie ou de base de données |
-| `4` | conflit de chemin, de nom ou de révision |
+| `4` | conflit d'identité annoncée ou de révision |
 
 Les commandes mutatives affichent uniquement un diagnostic synthétique. Les commandes de
 consultation produisent du texte stable ou, avec `--format json`, un objet versionné.
