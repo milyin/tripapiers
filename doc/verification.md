@@ -1,280 +1,111 @@
 # tripapiers — vérification
 
-> **Statut : brouillon.** Ce document décrit un composant indépendant et optionnel, susceptible
-> d'évoluer après la mise en œuvre du pipeline principal.
+> **Statut : brouillon.** Ce document esquisse les contrôles d'intégrité du registre. Leur
+> interface pourra évoluer pendant l'implémentation.
 
----
+## 1. Périmètre
 
-## 1. Rôle
+La vérification porte d'abord sur SQLite, qui est l'autorité pour les textes, les références,
+les tags, les règles et les classifications. Elle n'attend aucune arborescence particulière et
+ne réalise ni OCR, ni analyse sémantique, ni appel à une IA.
 
-Le composant de vérification relit les autorités visibles sur le disque :
+Deux contrôles sont séparés :
 
-- `tripapiers.toml` et `.CONFIG` ;
-- les originaux sous `DOC/YYYY/MM/DD` ;
-- les artefacts OCR sous `OCR/YYYY/MM/DD` ;
-- les artefacts d'étiquetage sous `TAG/YYYY/MM/DD` ;
-- les ensembles en échec sous `QUARANTINE/YYYY/MM/DD`.
+- `db verify` vérifie les données internes et reste indépendant du système de fichiers ;
+- `file verify` relit volontairement les chemins externes encore présents afin de signaler les
+  fichiers absents ou dont les octets ont changé.
 
-Il ne crée, ne déplace et ne supprime aucun fichier. Il ne dépend ni de l'état interne du
-pipeline, ni du ledger, ni des journaux de transaction pour conclure qu'un triplet est valide.
+Aucun contrôle ne modifie, déplace ou supprime un fichier externe.
 
-Le pipeline fonctionne sans ce composant. Sans lui, les erreurs survenues après le rangement —
-modification manuelle, bit rot, suppression d'un membre ou copie dans une mauvaise date — ne
-sont simplement pas auditées de façon indépendante.
-
----
-
-## 2. Principe d'indépendance
-
-La vérification réimplémente les contrôles à partir des contrats documentés ; elle n'appelle ni
-les constructeurs YAML du pipeline, ni ses fonctions de résolution de triplets.
-
-Entrées autorisées :
-
-- fichiers sous les cinq racines configurées ;
-- `tripapiers.toml`, `tags.yml` et `evaluation.yml` ;
-- schémas et types de lecture du crate `core`.
-
-Entrées interdites pour l'audit normal :
-
-- `tripapiers.db` ;
-- `journal/` ;
-- réponses brutes ou caches internes d'un fournisseur ;
-- fonctions mutatives de `store` et `pipeline`.
-
-Une divergence entre le producteur et l'auditeur est le signal recherché, pas une erreur à
-masquer en partageant davantage de code.
-
----
-
-## 3. Résolution de la configuration
-
-L'auditeur applique la même priorité déclarative que la CLI : arguments explicites, fichier
-TOML, valeurs par défaut. Il réimplémente cependant les validations :
-
-- racines non vides et distinctes ;
-- absence de chevauchement entre `INBOX`, `QUARANTINE`, `DOC`, `OCR` et `TAG` ;
-- aucun lien symbolique utilisé comme racine gérée ;
-- chemins relatifs résolus depuis le fichier TOML, ou depuis `--root` lorsqu'il est fourni ;
-- existence et validité des fichiers de `.CONFIG`.
-
-Une configuration ambiguë interrompt l'audit avant tout parcours.
-
----
-
-## 4. Contrôles unitaires
-
-### 4.1 Original sous `DOC`
-
-Pour `DOC/YYYY/MM/DD/<filename>` :
-
-- `YYYY/MM/DD` est une date civile valide ;
-- le fichier est ordinaire, jamais un lien symbolique ;
-- `<filename>` ne porte pas un suffixe réservé `.ocr.yml` ou `.tag.yml` ;
-- son SHA-256 est calculable et correspond aux artefacts associés lorsqu'ils sont présents.
-
-La date du chemin est comparée à `source.added_date` dans chaque YAML présent. Aucun tag `date:`
-et aucune métadonnée du fichier ne sont utilisés pour dériver ce chemin. Un document seul est
-un état valide après `take`.
-
-### 4.2 Artefact OCR
-
-Pour `OCR/YYYY/MM/DD/<filename>.ocr.yml` :
-
-| Contrôle | Détail |
-|---|---|
-| Schéma | `schema_version` connue, clés attendues uniquement |
-| Source | `source.filename`, `source.sha256` et `source.added_date` présents |
-| Emplacement | date et nom cohérents avec le document sous `DOC` |
-| Moteur | `ocr.engine.kind` dans `local\|model`, nom non vide, version si disponible |
-| Langues | liste non vide de codes configurés |
-| Confiance | entier `0..100`, `source: local`, version de formule connue |
-| Repli vision | cohérent avec `engine.kind` |
-| Texte | chaîne UTF-8 présente, scalaire littéral dans la forme canonique |
-
-L'auditeur vérifie explicitement que la confiance vient du calcul local. Il n'attend et
-n'accepte aucun tag `confiance:` dans l'artefact TAG.
-
-### 4.3 Artefact TAG
-
-Pour `TAG/YYYY/MM/DD/<filename>.tag.yml` :
-
-| Contrôle | Détail |
-|---|---|
-| Source | nom, SHA-256 et `added_date` identiques à l'original et à l'OCR |
-| Lien OCR | `ocr.sha256` correspond aux octets du `.ocr.yml` associé |
-| Moteur | `classification.engine: regexp`, version connue et horodatage analysable |
-| Règles | `rules_sha256` recalculée depuis la forme canonique de `tags.yml` courant |
-| Revue | `review_status` dans `pending\|accepted` |
-| Grammaire | segments, casse et bornes dures respectés |
-| Valeurs | chemin statique déclaré ou résultat valide d'un gabarit `emit` déclaré |
-| Correspondances | règle connue, plage UTF-8 valide et regex correspondant réellement au texte OCR |
-| Résultat | réexécution indépendante donnant exactement le même ensemble de tags |
-| Cardinalités | satisfaites si `accepted`; sinon violations exactes consignées si `pending` |
-| Ordre | tags et preuves triés lexicographiquement, sans doublon |
-| Confiance | aucun namespace `confiance:` présent |
-
-Un artefact classé avec une ancienne empreinte de règles reste historiquement lisible. Il est
-signalé comme `stale_rules`, pas comme corrompu. Sans la révision historique correspondante,
-l'auditeur ne prétend pas pouvoir reproduire ses tags.
-
----
-
-## 5. Audit global
-
-### 5.1 Progression `DOC` / `OCR` / `TAG`
-
-L'auditeur construit trois ensembles de clés `(date, filename)` sans suivre les liens
-symboliques. Il exige une relation d'inclusion : `TAG ⊆ OCR ⊆ DOC`.
-
-Il signale :
-
-- OCR sans document ou TAG sans OCR, qui sont des états orphelins ;
-- membre placé sous une autre date ;
-- nom de base divergent ;
-- SHA-256 divergent ;
-- doublon de contenu sous plusieurs clés, comme avertissement distinct.
-
-`DOC` seul (`taken`) et `DOC+OCR` (`extracted`) sont des états valides produits par les commandes
-indépendantes. Ils peuvent être signalés comme incomplets selon la politique de l'audit, mais
-ne sont pas des corruptions. `DOC+OCR+TAG` correspond à l'état `classified`.
-Le champ `classification.review_status` distingue ensuite une classification mécanique encore
-à revoir d'une classification devenue référence.
-
-Le script Bash de référence peut rendre ces états progressifs visibles entre deux commandes.
-La commande native `sort`, elle, les garde dans son staging transactionnel. L'auditeur ne déduit
-pas leur origine ; il peut seulement avertir lorsqu'un état progressif dépasse un délai donné.
-
-### 5.2 Audit d'`INBOX`
-
-`INBOX` ne contient que les documents sources que `sort` transmettra à `take`. L'auditeur signale
-les fichiers portant les suffixes réservés `.ocr.yml` ou `.tag.yml`, les sous-dossiers, liens
-symboliques, temporaires abandonnés et fichiers déjà présents à l'identique sous `DOC`.
-
-Un fichier ancien dans `INBOX` n'est pas une corruption. Il produit un avertissement
-`pending_too_long` avec un seuil configurable pour attirer l'attention sur une panne récurrente.
-
-### 5.3 Audit de `QUARANTINE`
-
-Chaque entrée suit :
+## 2. Vérification interne
 
 ```text
-QUARANTINE/YYYY/MM/DD/<filename>--<short-sha>/
+tripapiers db verify [--format text|json]
 ```
 
-Elle contient l'original, les artefacts YAML qui avaient pu être produits et `report.yml`.
-L'auditeur vérifie :
+Le contrôle ouvre une transaction de lecture cohérente et vérifie au minimum :
 
-- cohérence des noms, date et empreintes ;
-- présence de la phase et d'au moins une raison typée ;
-- absence simultanée du même document dans un triplet valide ;
-- absence de fichier temporaire ou inconnu ;
-- cohérence des chemins cibles consignés dans le rapport avec la configuration actuelle.
+- `PRAGMA integrity_check` et toutes les clés étrangères ;
+- la forme canonique et l'unicité des SHA-256 ;
+- une taille non négative et un nom UTF-8 valide pour chaque entrée ;
+- l'unicité globale des chemins normalisés ;
+- l'empreinte de chaque texte stocké ;
+- l'existence des classifications et l'unicité de leur nom ;
+- l'existence du tag visé par chaque règle et chaque affectation ;
+- des positions de regex contiguës à partir de 1 pour chaque tag ;
+- la compilation de toutes les regex avec les limites configurées ;
+- l'absence de regex en double ou correspondant à la chaîne vide ;
+- l'égalité entre les affectations dérivées stockées et un recalcul complet ;
+- l'union correcte des affectations explicites et dérivées dans la vue effective.
 
-### 5.4 Absence de vues dérivées
+Le contrôle des affectations s'effectue dans une table temporaire de la connexion de lecture. Il
+ne répare jamais silencieusement la base. `class rebuild` est la commande mutative explicite si
+une reconstruction est nécessaire.
 
-Le composant n'attend aucune racine de structure, aucun index et aucun raccourci. Dans les
-racines gérées, tout lien symbolique est une erreur. L'audit ne construit donc aucun plan de vue
-et ne possède aucun mode de reconstruction.
-
----
-
-## 6. Interface envisagée
+## 3. Vérification des références externes
 
 ```text
-tripapiers verify [documents|ocr|tags|inbox|quarantine|all]
-  [--format text|json]
-  [--fail-fast]
-  [--config <path>]
-  [--root <path>]
-  [--inbox-dir <path>]
-  [--quarantine-dir <path>]
-  [--documents-dir <path>]
-  [--ocr-dir <path>]
-  [--tags-dir <path>]
+tripapiers file verify (<path> | --sha <sha>) [--format text|json]
+tripapiers file verify --all [--format text|json]
 ```
 
-Les commandes, modes, arguments, clés JSON et codes de contrôle sont en anglais. Les messages
-du format `text` sont en français.
+Pour chaque référence, le contrôle distingue :
 
-Code de sortie :
+- `ok` : fichier ordinaire, taille et SHA identiques ;
+- `missing` : chemin absent ;
+- `not_regular` : chemin présent mais ne désignant pas un fichier ordinaire ;
+- `size_mismatch` : taille différente, sans calcul d'empreinte inutile ;
+- `sha_mismatch` : même taille mais contenu différent ;
+- `unreadable` : accès impossible.
 
-- `0` : aucun défaut ;
-- `1` : défaut de corpus ;
-- `2` : configuration ou invocation invalide ;
-- `3` : audit incomplet à cause d'une panne d'infrastructure.
+Un chemin absent n'est pas une corruption de la base et n'est jamais détaché automatiquement.
+Une entrée sans chemin est valide et apparaît comme `detached`. Un même contenu sous plusieurs
+chemins est également valide.
 
-Le JSON est versionné, trié par `(date, filename, check)` et stable pour permettre sa comparaison
-en CI.
+La vérification protège contre le remplacement concurrent : elle relève les métadonnées avant
+et après la lecture et signale `changed_during_read` si elles diffèrent. Elle ne promet toutefois
+pas de verrouiller un fichier administré par un autre programme.
 
----
+## 4. Vérification des classifications
 
-## 7. Correspondance avec les invariants du pipeline
+Pour chaque classification, l'auditeur reconstruit mécaniquement les tags dérivés à partir du
+texte exact et de la liste ordonnée des regex. Il compare :
 
-| # | Invariant | Contrôle |
-|---|---|---|
-| 1 | date choisie par `take` | comparaison avec `source.added_date` |
-| 2 | progression préfixe-complète | inclusion `TAG ⊆ OCR ⊆ DOC` |
-| 3 | original préservé | empreintes croisées |
-| 4 | OCR lié au document | `OCR.source.sha256` |
-| 5 | TAG lié à l'OCR | `TAG.ocr.sha256` |
-| 6 | confiance locale uniquement | contrat OCR + absence de `confiance:` |
-| 7 | date documentaire sans effet sur le chemin | contrôle de dérivation |
-| 8 | aucune vue par lien | refus des liens symboliques |
-| 9 | priorité des chemins | résolution indépendante de la configuration |
-| 10 | tags issus uniquement des regex | réexécution indépendante sur le texte OCR |
-| 11 | échec de `sort` déplaçant les artefacts disponibles | audit de l'entrée et du rapport |
-| 12 | échec de `take` préservant la source sans option de quarantaine | propriété d'exécution |
-| 13 | suppression tout ou rien des membres présents | absence de nouvel état orphelin |
-| 14 | catégories dans `tags.yml` | validation des feuilles de règles et chemins statiques |
-| 15 | interface configurable en anglais | tests CLI et schéma TOML |
-| 16 | `<path>` imposant le mode autonome | tests CLI d'intégration |
-| 17 | mode géré exigeant nom et date | tests CLI d'invocation |
-| 18 | `remove` sans argument positionnel | tests CLI d'invocation |
-| 19 | copie SQLite de chaque texte OCR | propriété d'exécution, hors audit normal |
-| 20 | revue globale avant activation des règles | propriété de la procédure de publication |
-| 21 | classification déterministe | double réexécution indépendante des regex |
+- l'ensemble des fichiers étiquetés ;
+- l'ensemble effectif des tags de chaque fichier ;
+- la provenance par règle et la première plage de correspondance conservée ;
+- le numéro de révision et les compteurs associés.
 
-Les propriétés purement temporelles — verrouillage, ordre exact des `rename`, rollback avant
-visibilité — restent couvertes par les tests du pipeline et ne sont pas prouvables après coup.
+Les tags explicites ne sont pas jugés sémantiquement : seule leur intégrité référentielle est
+contrôlée. De même, une regex trop large mais valide est détectable par comparaison entre
+classifications, pas par `db verify`.
 
----
+## 5. Sauvegarde et réparation
 
-## 8. Phases du composant optionnel
+Avant toute réparation, l'utilisateur crée un instantané cohérent :
 
-### Phase V1 — Contrats OCR et TAG
+```console
+tripapiers db backup ./tripapiers-before-repair.db
+```
 
-- Parseurs indépendants et rapports structurés.
-- Compilation indépendante des regex et reproduction des tags depuis le texte OCR.
-- Une fixture saine et une fixture corrompue pour chaque champ.
-- Tests croisés : tout artefact produit par le pipeline passe l'audit ; des producteurs mutés
-  volontairement sont détectés.
+Les réparations envisagées restent des commandes explicites et bornées :
 
-### Phase V2 — Inventaires
+- `class rebuild` reconstruit les affectations dérivées ;
+- `file detach <path>` retire une référence devenue inutile ;
+- `file update … --text …` remplace un texte connu comme erroné ;
+- `db vacuum` compacte la base après contrôle.
 
-- Parcours bornés des cinq racines.
-- Correspondance des triplets, détection d'orphelins, doublons et dates divergentes.
-- Audit complet de `QUARANTINE`.
+Il n'existe pas de mode qui déplace les fichiers selon leurs tags ni qui reconstitue une
+arborescence : cela resterait hors de la responsabilité de `tripapiers`.
 
-### Phase V3 — CLI et diagnostic
+## 6. Codes de sortie envisagés
 
-- Sous-commandes de `verify`, formats texte et JSON, codes de sortie.
-- Exécution sans réseau et sans dépendance au client LLM.
-- Corpus synthétique d'au moins 500 triplets avec corruptions injectées.
+| Code | Signification |
+|---|---|
+| `0` | aucun défaut pour le périmètre demandé |
+| `1` | invariant interne violé ou contenu externe divergent |
+| `2` | invocation ou configuration invalide |
+| `3` | vérification incomplète à cause d'une panne d'entrée-sortie |
 
----
-
-## 9. Recette minimale
-
-1. Ensemble sain dans chacun des états `taken`, `extracted` et `classified` : `verify all`
-   retourne 0.
-2. Modifier un octet du document : les deux liens SHA deviennent invalides.
-3. Modifier le texte OCR sans refaire les tags : `TAG.ocr.sha256` diverge.
-4. Déplacer seulement le TAG sous une autre date : TAG orphelin aux deux emplacements.
-5. Ajouter un tag `confiance:90` : rejet explicite.
-6. Modifier une regex sans refaire le TAG : signalement `stale_rules`.
-7. Modifier un tag ou sa plage de correspondance : la réexécution indépendante détecte l'écart.
-8. Créer un lien symbolique dans chaque racine : chaque cas est rejeté sans suivre la cible.
-9. Corrompre `tripapiers.toml` ou faire chevaucher deux racines : audit interrompu avec code 2.
-10. Créer une entrée de quarantaine sans rapport ou sans original : défaut nommé précisément.
-11. Simuler une erreur de lecture au milieu du parcours : code 3, jamais un faux succès.
+Le JSON sera versionné et trié de façon déterministe par `(classification, sha256, check,
+path)` afin de rester comparable en intégration continue.

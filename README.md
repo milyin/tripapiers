@@ -1,91 +1,101 @@
 # tripapiers
 
-Outil local de tri documentaire. Les fichiers déposés dans `INBOX` sont extraits, étiquetés et
-rangés selon leur date d'ajout au système :
+`tripapiers` est un registre local de documents. Il conserve dans SQLite :
 
-```text
-DOC/YYYY/MM/DD/fichier-original.pdf
-OCR/YYYY/MM/DD/fichier-original.pdf.ocr.yml
-TAG/YYYY/MM/DD/fichier-original.pdf.tag.yml
+- l'identité d'un fichier (nom, taille et SHA-256) ;
+- zéro, un ou plusieurs chemins qui font référence à ce contenu ;
+- le texte associé au fichier ;
+- les tags explicites et ceux produits par des expressions régulières ;
+- plusieurs classifications nommées afin de comparer des variantes de règles et d'étiquetage.
+
+L'outil n'utilise **aucune IA**, ne réalise pas d'OCR et n'organise pas les documents. Il ne
+copie, ne déplace et ne supprime jamais les fichiers référencés. Les extracteurs, agents et
+scripts externes choisissent librement leur arborescence et utilisent `tripapiers` comme base
+de textes et moteur de classification mécanique.
+
+## Exemple
+
+```console
+tripapiers file add ./facture.pdf
+tripapiers file update ./facture.pdf --text ./facture.txt
+
+tripapiers class copy candidate
+tripapiers class select candidate
+tripapiers tag add cuisine:recette
+tripapiers tag regexp add cuisine:recette '/pomme/i' --dry-run
+tripapiers tag regexp add cuisine:recette '/pomme/i'
+tripapiers class compare default
 ```
 
-Un ensemble qui ne peut pas être rangé correctement est déplacé avec ses YAML disponibles dans
-`QUARANTINE`. Les cinq racines sont configurables dans `tripapiers.toml` et par les arguments de
-ligne de commande.
+L'ajout de la règle recalcule immédiatement le tag concerné sur **tous** les textes. Si
+`/pomme/i` étiquette aussi une facture de téléphone, `class compare default` rend ce changement
+visible. La règle peut alors être retirée ou resserrée, puis la comparaison répétée.
 
-Principes :
+## Interface prévue
 
-- **Octets préservés.** `take` déplace le fichier dans `DOC` sans transformer son contenu ;
-  `--name` peut seulement redéfinir son nom cible.
-- **Artefacts séparés.** Le texte et les métadonnées OCR vivent dans `OCR` ; les tags vivent
-  dans `TAG`.
-- **Classification mécanique.** `classify` applique uniquement les expressions régulières de
-  `tags.yml`. Un agent peut faire évoluer ces règles après une reclassification complète du
-  corpus, mais aucun modèle n'intervient dans la classification courante.
-- **Confiance locale.** Le score OCR est calculé par les outils locaux et n'est jamais demandé à
-  un modèle.
-- **Aucun raccourci.** Cette première version ne construit ni vue logique ni lien symbolique.
-- **Étapes composables.** `sort` enchaîne `take`, `extract` et `classify`, puis place en
-  quarantaine tous les artefacts disponibles dès qu'une étape échoue.
+```text
+tripapiers file add <path>
+tripapiers file attach <sha> <path>
+tripapiers file detach <path>
+tripapiers file info <path> | --sha <sha>
+tripapiers file update (<path> | --sha <sha>) [--name <name>] [--text <path>] [--clear-text]
+tripapiers file text (<path> | --sha <sha>) [--output <path>]
+tripapiers file paths (<path> | --sha <sha>)
+tripapiers file list [--glob <glob>]... [--regexp <regexp>]... [--tag <tag>]...
+tripapiers file tag add (<path> | --sha <sha>) <tag>
+tripapiers file tag remove (<path> | --sha <sha>) <tag>
+tripapiers file tag list (<path> | --sha <sha>)
+tripapiers file verify ((<path> | --sha <sha>) | --all)
+tripapiers file remove --sha <sha> [--yes]
 
-## État
+tripapiers tag add <tag>
+tripapiers tag remove <tag> [--yes]
+tripapiers tag list [--glob <glob>]... [--regexp <regexp>]...
+tripapiers tag regexp add <tag> <regexp> [--dry-run]
+tripapiers tag regexp remove <tag> (<position> | <regexp>) [--dry-run]
+tripapiers tag regexp list <tag>
+tripapiers tag regexp test <tag> <regexp>
 
-**Conception.** L'application n'est pas encore implémentée. Le seul exécutable est le script
-Bash pédagogique qui précise le contrat attendu de `sort`.
+tripapiers class current
+tripapiers class list
+tripapiers class select <name>
+tripapiers class new <new_name>
+tripapiers class copy <new_name>
+tripapiers class rename <new_name>
+tripapiers class delete [<name>] [--yes]
+tripapiers class rebuild [--dry-run]
+tripapiers class compare <name> [--format text|json]
+
+tripapiers db info
+tripapiers db verify
+tripapiers db backup <path>
+tripapiers db vacuum
+```
+
+Les commandes `tag …` et `file tag …` travaillent sur la classification courante. L'argument
+global `--class <name>` permet de viser explicitement une autre classification, ce qui est
+préférable dans les scripts.
+
+## Documentation
 
 | Document | Rôle |
 |---|---|
-| [`doc/traitement-des-fichiers.md`](doc/traitement-des-fichiers.md) | Pipeline, formats, configuration et CLI |
-| [`doc/evolution-des-regles.md`](doc/evolution-des-regles.md) | Boucle de création, régression et publication des regex |
-| [`doc/verification.md`](doc/verification.md) | Brouillon de l'audit indépendant et optionnel |
+| [`doc/traitement-des-fichiers.md`](doc/traitement-des-fichiers.md) | Modèle de données, invariants, CLI et transactions |
+| [`doc/evolution-des-regles.md`](doc/evolution-des-regles.md) | Procédure itérative de modification des regex |
+| [`doc/verification.md`](doc/verification.md) | Brouillon de la vérification de la base et des références |
 
-Les premières commandes prévues sont :
+## État
 
-```text
-tripapiers inbox
-tripapiers take <path> [--name <filename>] [--date <YYYY-MM-DD>] [--quarantine-on-error]
-tripapiers extract <path> [--output <path>] [--force]
-tripapiers extract --name <filename> --date <YYYY-MM-DD> [--quarantine-on-error]
-tripapiers classify <path> [--output <path>] [--force]
-tripapiers classify --name <filename> --date <YYYY-MM-DD> [--quarantine-on-error]
-tripapiers sort
-tripapiers remove --name <filename> --date <YYYY-MM-DD>
-tripapiers rules begin --name <filename> --date <YYYY-MM-DD>
-tripapiers rules expect --session <id> [--tag <tag>]...
-tripapiers rules check --session <id>
-tripapiers rules run --session <id>
-tripapiers rules diff --session <id>
-tripapiers rules show --session <id> --document <id> [--full-text]
-tripapiers rules decide --session <id> --change <id> --accept|--reject --reason <text>
-tripapiers rules commit --session <id>
-tripapiers rules abort --session <id>
-```
+**Conception.** L'application n'est pas encore implémentée.
 
-Avec `<path>`, `extract` et `classify` travaillent en mode autonome et ignorent le routage
-`DOC/OCR/TAG`. Sans `<path>`, elles exigent `--name` et `--date` et utilisent les racines gérées.
-`remove` n'accepte jamais de chemin positionnel. `extract` et `classify` écrivent leur résultat
-complet dans le YAML correspondant et n'affichent qu'un diagnostic synthétique, jamais le texte
-OCR ni les tags.
-
-Chaque texte OCR est aussi indexé dans SQLite afin de pouvoir tester rapidement une révision de
-`tags.yml` sur l'ensemble du corpus. Les fichiers visibles restent les autorités et permettent
-de reconstruire cette base.
-
-[`scripts/sort-reference.sh`](scripts/sort-reference.sh) montre en quelques lignes la composition
-fonctionnelle de `sort`. `inbox` masque l'inventaire technique et `--quarantine-on-error` masque
-le routage des échecs, afin que le script ne décrive que l'enchaînement `take` → `extract` →
-`classify`. Il expose les états intermédiaires ; la commande native `sort` fournit les mêmes
-résultats finaux avec staging, journal et validation transactionnelle.
-
-Les commandes, arguments et clés de configuration utilisent des noms anglais ; les messages et
+Les noms de commandes, d'arguments, de champs et de statuts sont en anglais. Les diagnostics et
 la documentation destinés à l'utilisateur sont en français.
 
 ## Prérequis prévus
 
-- Rust stable, édition 2024
-- `poppler-utils` (`pdfinfo`, `pdftotext`, `pdftoppm`)
-- `tesseract-ocr` avec les langues configurées
-- SQLite 3
+- Rust stable, édition 2024 ;
+- SQLite 3 ;
+- un moteur d'expressions régulières Unicode à temps d'exécution borné.
 
 ## Licence
 
