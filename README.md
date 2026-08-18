@@ -17,7 +17,7 @@ de textes et moteur de classification mécanique.
 
 ```console
 tripapiers file add ./facture.pdf
-tripapiers file update ./facture.pdf --text ./facture.txt
+tripapiers file text update ./facture.pdf --text ./facture.txt
 
 tripapiers class copy candidate
 tripapiers class select candidate
@@ -55,8 +55,8 @@ tripapiers file add <path>
 tripapiers file attach <sha> <path>
 tripapiers file detach <path>
 tripapiers file info (<path> | --sha <sha>)
-tripapiers file update (<path> | --sha <sha>) (--text <path> | --clear-text)
-tripapiers file text (<path> | --sha <sha>) [--output <path>]
+tripapiers file text update (<path> | --sha <sha>) (--text <path> | --clear-text)
+tripapiers file text show (<path> | --sha <sha>) [--output <path>]
 tripapiers file paths (<path> | --sha <sha>)
 tripapiers file name add (<path> | --sha <sha>) <name>
 tripapiers file name remove (<path> | --sha <sha>) <name>

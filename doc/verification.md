@@ -99,7 +99,7 @@ Les réparations envisagées restent des commandes explicites et bornées :
 - `class rebuild` reconstruit les affectations ;
 - `file detach <path>` retire une référence devenue inutile ;
 - `file name add` et `file name remove` corrigent les alias indépendamment des chemins ;
-- `file update … --text …` remplace un texte connu comme erroné ;
+- `file text update … --text …` remplace un texte connu comme erroné ;
 - `db vacuum` compacte la base après contrôle.
 
 Il n'existe pas de mode qui déplace les fichiers selon leurs tags ni qui reconstitue une

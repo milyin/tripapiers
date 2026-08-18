@@ -168,20 +168,20 @@ avec `--yes`.
 
 ```text
 tripapiers file info (<path> | --sha <sha>) [--format text|json]
-tripapiers file update (<path> | --sha <sha>)
+tripapiers file text update (<path> | --sha <sha>)
   (--text <path> | --clear-text)
-tripapiers file text (<path> | --sha <sha>) [--output <path>]
+tripapiers file text show (<path> | --sha <sha>) [--output <path>]
 tripapiers file paths (<path> | --sha <sha>)
 tripapiers file verify ((<path> | --sha <sha>) | --all)
 ```
 
-`file update --text` lit intégralement le fichier texte UTF-8 fourni. `--clear-text` est
+`file text update --text` lit intégralement le fichier texte UTF-8 fourni. `--clear-text` est
 incompatible avec `--text`. Le SHA et la taille ne peuvent pas être modifiés.
 
 `file info` affiche l'identité, tous les noms et chemins, la présence et l'empreinte du texte,
 puis les tags avec leur provenance dans la classification choisie. Il n'affiche pas le texte.
-`file text` écrit le texte sur stdout ou dans `--output`. `file paths` liste les références, y
-compris celles qui n'existent plus. `file verify` relit les chemins présents sur disque et
+`file text show` écrit le texte sur stdout ou dans `--output`. `file paths` liste les références,
+y compris celles qui n'existent plus. `file verify` relit les chemins présents sur disque et
 compare taille et SHA sans modifier la base ; `--all` contrôle toutes les entrées.
 
 ### 5.4 Noms
@@ -314,7 +314,7 @@ tout. `--if-revision <number>` permet à un outil externe de refuser une écritu
 classification a changé depuis sa lecture.
 
 La base et ses sauvegardes sont créées avec des permissions limitées à l'utilisateur. Les
-diagnostics n'impriment jamais le texte sauf sur demande explicite avec `file text`.
+diagnostics n'impriment jamais le texte sauf sur demande explicite avec `file text show`.
 
 ## 9. Commandes de maintenance
 

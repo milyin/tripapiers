@@ -38,7 +38,7 @@ L'extraction reste entièrement externe :
 
 ```console
 tripapiers file add ./documents/facture.pdf
-tripapiers file update ./documents/facture.pdf --text ./travail/facture.txt
+tripapiers file text update ./documents/facture.pdf --text ./travail/facture.txt
 ```
 
 Le second appel remplace le texte partagé et recalcule ce fichier dans toutes les
@@ -104,8 +104,8 @@ unchanged: 431
 ```
 
 Le détail identifie les fichiers par SHA, noms et chemins connus. Il indique la regex et la
-plage de correspondance, mais pas le texte complet. L'outil externe utilise `file text` pour
-lire explicitement un document lorsqu'il en a besoin.
+plage de correspondance, mais pas le texte complet. L'outil externe utilise `file text show`
+pour lire explicitement un document lorsqu'il en a besoin.
 
 `class compare` ne se limite pas à la dernière commande : il compare l'état complet des deux
 classifications et révèle aussi les effets cumulés, les suppressions de tags et les changements
