@@ -5,9 +5,10 @@
 `tripapiers` est une base locale qui relie des contenus, des noms, des chemins, des textes, des
 tags et des règles. Il est volontairement agnostique à la structure des dossiers.
 
-Il ne réalise aucune extraction, aucun OCR et aucun appel à un modèle. Il ne déduit rien du nom
-ou de l'emplacement d'un fichier. Il ne copie, ne déplace, ne renomme et ne supprime jamais un
-fichier externe. Ces opérations appartiennent aux outils qui l'appellent.
+Il reçoit des fichiers et des textes fournis par ses appelants. Son comportement est entièrement
+mécanique : il ne déduit rien du nom ou de l'emplacement d'un fichier. Il ne copie, ne déplace,
+ne renomme et ne supprime jamais un fichier externe. Ces opérations appartiennent aux outils qui
+l'appellent.
 
 Un fichier peut rester enregistré sans nom et sans chemin. Un chemin peut être momentanément
 absent du disque. Ces états sont valides : la base décrit des références, pas une arborescence
@@ -302,9 +303,8 @@ max_pattern_bytes = 4096
 max_compiled_bytes = 1048576
 ```
 
-Il n'existe aucune configuration `DOC`, `OCR`, `TAG`, `INBOX` ou `QUARANTINE`. Le chemin de la
-base peut être remplacé par l'argument global `--database <path>`. Un chemin relatif est résolu
-depuis le fichier de configuration.
+Le chemin de la base peut être remplacé par l'argument global `--database <path>`. Un chemin
+relatif est résolu depuis le fichier de configuration.
 
 ### 8.3 Transactions et concurrence
 

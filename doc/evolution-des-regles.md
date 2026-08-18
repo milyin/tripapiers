@@ -11,9 +11,8 @@ courante. Le résultat est atomique et immédiatement comparable à une classifi
 référence. Une erreur comme `/pomme/i`, qui étiquette à la fois une recette et une facture de
 téléphone, devient donc visible avant que la variante soit adoptée.
 
-Les classifications nommées remplacent les anciennes notions de fichier de règles publié, de
-session cachée et de corpus de staging. Elles sont des instantanés explicites, conservés dans la
-même base et manipulables par la CLI.
+Les classifications nommées sont des instantanés explicites, conservés dans la même base et
+manipulables par la CLI.
 
 ## 2. Préparer une variante
 

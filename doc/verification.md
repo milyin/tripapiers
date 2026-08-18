@@ -6,8 +6,8 @@
 ## 1. Périmètre
 
 La vérification porte d'abord sur SQLite, qui est l'autorité pour les textes, les références,
-les tags, les règles et les classifications. Elle n'attend aucune arborescence particulière et
-ne réalise ni OCR, ni analyse sémantique, ni appel à une IA.
+les tags, les règles et les classifications. Elle contrôle mécaniquement les données du registre,
+indépendamment de l'arborescence choisie par les outils externes.
 
 Deux contrôles sont séparés :
 
@@ -102,8 +102,8 @@ Les réparations envisagées restent des commandes explicites et bornées :
 - `file text update … --text …` remplace un texte connu comme erroné ;
 - `db vacuum` compacte la base après contrôle.
 
-Il n'existe pas de mode qui déplace les fichiers selon leurs tags ni qui reconstitue une
-arborescence : cela resterait hors de la responsabilité de `tripapiers`.
+Les réparations agissent uniquement sur le registre. L'organisation des fichiers externes reste
+sous la responsabilité des outils appelants.
 
 ## 6. Codes de sortie envisagés
 

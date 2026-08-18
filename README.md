@@ -8,10 +8,10 @@
 - les tags produits par des expressions régulières ;
 - plusieurs classifications nommées afin de comparer des variantes de règles et d'étiquetage.
 
-L'outil n'utilise **aucune IA**, ne réalise pas d'OCR et n'organise pas les documents. Il ne
-copie, ne déplace et ne supprime jamais les fichiers référencés. Les extracteurs, agents et
-scripts externes choisissent librement leur arborescence et utilisent `tripapiers` comme base
-de textes et moteur de classification mécanique.
+L'outil n'utilise **aucune IA**. Il reçoit les textes produits par des outils externes et ne
+copie, ne déplace ni ne supprime jamais les fichiers référencés. Les extracteurs, agents et
+scripts choisissent librement leur arborescence et utilisent `tripapiers` comme base de textes et
+moteur de classification mécanique.
 
 ## Exemple
 
