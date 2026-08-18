@@ -36,7 +36,7 @@ Deux chemins vers les mêmes octets enrichissent la même entrée :
 ```console
 tripapiers file add /Downloads/impot_2022.pdf
 tripapiers file add /Documents/Jean_dupont_impot.pdf
-tripapiers file name list --sha sha256:<hex>
+tripapiers file name list --sha <sha>
 tripapiers file detach /Downloads/impot_2022.pdf
 ```
 

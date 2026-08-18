@@ -17,9 +17,10 @@ qu'elle administrerait.
 
 ### 2.1 Identité par contenu
 
-L'identifiant immuable est `sha256:<64 caractères hexadécimaux>`, calculé sur les octets du
-fichier au moment de `file add`. La taille appartient à cette identité. Les noms et les chemins
-forment deux ensembles de métadonnées modifiables et indépendants.
+L'identifiant immuable est le SHA-256 des octets du fichier au moment de `file add`, représenté
+par 64 caractères hexadécimaux. La CLI reçoit uniquement ces 64 caractères, sans préfixe, et les
+normalise en minuscules. La taille appartient à cette identité. Les noms et les chemins forment
+deux ensembles de métadonnées modifiables et indépendants.
 
 Une entrée contient :
 
@@ -125,11 +126,13 @@ Les commandes qui acceptent `<path_or_sha>` ont exactement deux formes :
 
 ```text
 tripapiers file info <path>
-tripapiers file info --sha sha256:<hex>
+tripapiers file info --sha <sha>
 ```
 
-Un SHA n'est jamais accepté comme argument positionnel. Le préfixe `sha256:` est obligatoire.
-Les options mutuellement exclusives sont validées avant toute mutation.
+Dans les commandes acceptant `<path_or_sha>`, le chemin est positionnel et le SHA est introduit
+par `--sha`; cette option suffit à les distinguer. `file attach`, dont la première position est
+réservée au SHA, accepte directement la même valeur hexadécimale. Les options mutuellement
+exclusives sont validées avant toute mutation.
 
 ### 5.2 Ajout, rattachement et retrait
 
