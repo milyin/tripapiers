@@ -27,7 +27,8 @@ Le contrôle ouvre une transaction de lecture cohérente et vérifie au minimum 
 
 - `PRAGMA integrity_check` et toutes les clés étrangères ;
 - la forme canonique et l'unicité des SHA-256 ;
-- une taille non négative et un nom UTF-8 valide pour chaque entrée ;
+- une taille non négative pour chaque entrée et des noms UTF-8 valides ;
+- l'unicité de chaque couple `(sha256, name)`, sans exiger l'unicité globale d'un nom ;
 - l'unicité globale des chemins normalisés ;
 - l'empreinte de chaque texte stocké ;
 - l'existence des classifications et l'unicité de leur nom ;
@@ -35,8 +36,7 @@ Le contrôle ouvre une transaction de lecture cohérente et vérifie au minimum 
 - des positions de regex contiguës à partir de 1 pour chaque tag ;
 - la compilation de toutes les regex avec les limites configurées ;
 - l'absence de regex en double ou correspondant à la chaîne vide ;
-- l'égalité entre les affectations dérivées stockées et un recalcul complet ;
-- l'union correcte des affectations explicites et dérivées dans la vue effective.
+- l'égalité entre les affectations stockées et un recalcul complet.
 
 Le contrôle des affectations s'effectue dans une table temporaire de la connexion de lecture. Il
 ne répare jamais silencieusement la base. `class rebuild` est la commande mutative explicite si
@@ -60,7 +60,9 @@ Pour chaque référence, le contrôle distingue :
 
 Un chemin absent n'est pas une corruption de la base et n'est jamais détaché automatiquement.
 Une entrée sans chemin est valide et apparaît comme `detached`. Un même contenu sous plusieurs
-chemins est également valide.
+chemins est également valide. Les noms sont contrôlés séparément : le nom de base d'un chemin
+n'a pas à disparaître lorsque ce chemin est détaché, et un alias n'a pas à correspondre à un
+chemin existant.
 
 La vérification protège contre le remplacement concurrent : elle relève les métadonnées avant
 et après la lecture et signale `changed_during_read` si elles diffèrent. Elle ne promet toutefois
@@ -68,7 +70,7 @@ pas de verrouiller un fichier administré par un autre programme.
 
 ## 4. Vérification des classifications
 
-Pour chaque classification, l'auditeur reconstruit mécaniquement les tags dérivés à partir du
+Pour chaque classification, l'auditeur reconstruit mécaniquement les tags à partir du
 texte exact et de la liste ordonnée des regex. Il compare :
 
 - l'ensemble des fichiers étiquetés ;
@@ -76,9 +78,8 @@ texte exact et de la liste ordonnée des regex. Il compare :
 - la provenance par règle et la première plage de correspondance conservée ;
 - le numéro de révision et les compteurs associés.
 
-Les tags explicites ne sont pas jugés sémantiquement : seule leur intégrité référentielle est
-contrôlée. De même, une regex trop large mais valide est détectable par comparaison entre
-classifications, pas par `db verify`.
+La vérification ne juge pas les tags sémantiquement. Une regex trop large mais valide est
+détectable par comparaison entre classifications, pas par `db verify`.
 
 ## 5. Sauvegarde et réparation
 
@@ -90,8 +91,9 @@ tripapiers db backup ./tripapiers-before-repair.db
 
 Les réparations envisagées restent des commandes explicites et bornées :
 
-- `class rebuild` reconstruit les affectations dérivées ;
+- `class rebuild` reconstruit les affectations ;
 - `file detach <path>` retire une référence devenue inutile ;
+- `file name add` et `file name remove` corrigent les alias indépendamment des chemins ;
 - `file update … --text …` remplace un texte connu comme erroné ;
 - `db vacuum` compacte la base après contrôle.
 

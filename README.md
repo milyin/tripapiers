@@ -2,10 +2,10 @@
 
 `tripapiers` est un registre local de documents. Il conserve dans SQLite :
 
-- l'identité d'un fichier (nom, taille et SHA-256) ;
+- l'identité d'un fichier (taille et SHA-256) et ses différents noms ;
 - zéro, un ou plusieurs chemins qui font référence à ce contenu ;
 - le texte associé au fichier ;
-- les tags explicites et ceux produits par des expressions régulières ;
+- les tags produits par des expressions régulières ;
 - plusieurs classifications nommées afin de comparer des variantes de règles et d'étiquetage.
 
 L'outil n'utilise **aucune IA**, ne réalise pas d'OCR et n'organise pas les documents. Il ne
@@ -31,20 +31,32 @@ L'ajout de la règle recalcule immédiatement le tag concerné sur **tous** les 
 `/pomme/i` étiquette aussi une facture de téléphone, `class compare default` rend ce changement
 visible. La règle peut alors être retirée ou resserrée, puis la comparaison répétée.
 
+Deux chemins vers les mêmes octets enrichissent la même entrée :
+
+```console
+tripapiers file add /Downloads/impot_2022.pdf
+tripapiers file add /Documents/Jean_dupont_impot.pdf
+tripapiers file name list --sha sha256:<hex>
+tripapiers file detach /Downloads/impot_2022.pdf
+```
+
+Les deux noms restent enregistrés après le détachement. Ils se gèrent indépendamment avec
+`file name add` et `file name remove`.
+
 ## Interface prévue
 
 ```text
 tripapiers file add <path>
 tripapiers file attach <sha> <path>
 tripapiers file detach <path>
-tripapiers file info <path> | --sha <sha>
-tripapiers file update (<path> | --sha <sha>) [--name <name>] [--text <path>] [--clear-text]
+tripapiers file info (<path> | --sha <sha>)
+tripapiers file update (<path> | --sha <sha>) (--text <path> | --clear-text)
 tripapiers file text (<path> | --sha <sha>) [--output <path>]
 tripapiers file paths (<path> | --sha <sha>)
+tripapiers file name add (<path> | --sha <sha>) <name>
+tripapiers file name remove (<path> | --sha <sha>) <name>
+tripapiers file name list (<path> | --sha <sha>)
 tripapiers file list [--glob <glob>]... [--regexp <regexp>]... [--tag <tag>]...
-tripapiers file tag add (<path> | --sha <sha>) <tag>
-tripapiers file tag remove (<path> | --sha <sha>) <tag>
-tripapiers file tag list (<path> | --sha <sha>)
 tripapiers file verify ((<path> | --sha <sha>) | --all)
 tripapiers file remove --sha <sha> [--yes]
 
@@ -72,9 +84,9 @@ tripapiers db backup <path>
 tripapiers db vacuum
 ```
 
-Les commandes `tag …` et `file tag …` travaillent sur la classification courante. L'argument
-global `--class <name>` permet de viser explicitement une autre classification, ce qui est
-préférable dans les scripts.
+Les commandes `tag …` travaillent sur la classification courante. L'argument global
+`--class <name>` permet de viser explicitement une autre classification, ce qui est préférable
+dans les scripts.
 
 ## Documentation
 

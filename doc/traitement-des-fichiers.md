@@ -2,35 +2,41 @@
 
 ## 1. Responsabilité
 
-`tripapiers` est une base locale qui relie des contenus, des chemins, des textes, des tags et
-des règles. Il est volontairement agnostique à la structure des dossiers.
+`tripapiers` est une base locale qui relie des contenus, des noms, des chemins, des textes, des
+tags et des règles. Il est volontairement agnostique à la structure des dossiers.
 
 Il ne réalise aucune extraction, aucun OCR et aucun appel à un modèle. Il ne déduit rien du nom
 ou de l'emplacement d'un fichier. Il ne copie, ne déplace, ne renomme et ne supprime jamais un
 fichier externe. Ces opérations appartiennent aux outils qui l'appellent.
 
-Un fichier peut rester enregistré sans chemin. Un chemin peut être momentanément absent du
-disque. Ces deux états sont valides : la base décrit des références, pas une arborescence qu'elle
-administrerait.
+Un fichier peut rester enregistré sans nom et sans chemin. Un chemin peut être momentanément
+absent du disque. Ces états sont valides : la base décrit des références, pas une arborescence
+qu'elle administrerait.
 
 ## 2. Identité et données conservées
 
 ### 2.1 Identité par contenu
 
 L'identifiant immuable est `sha256:<64 caractères hexadécimaux>`, calculé sur les octets du
-fichier au moment de `file add`. La taille appartient à cette identité. Le nom d'affichage et les
-chemins sont des métadonnées modifiables.
+fichier au moment de `file add`. La taille appartient à cette identité. Les noms et les chemins
+forment deux ensembles de métadonnées modifiables et indépendants.
 
 Une entrée contient :
 
-- `sha256`, `size` et `name` ;
+- `sha256` et `size` ;
+- un ensemble éventuellement vide de noms ;
 - un ensemble éventuellement vide de chemins absolus normalisés lexicalement ;
 - zéro ou un texte UTF-8, avec sa propre empreinte et sa date de mise à jour ;
-- pour chaque classification, les tags explicites et les tags dérivés des regex.
+- pour chaque classification, les tags produits par les regex.
 
-Deux chemins ayant le même SHA-256 sont rattachés à la même entrée. Si un chemin déjà rattaché
-désigne de nouveaux octets, `file add` échoue avec `path_conflict` : il faut d'abord exécuter
-`file detach`, puis ajouter le nouveau contenu. La base ne suit ni inode ni lien symbolique.
+Deux chemins ayant le même SHA-256 sont rattachés à la même entrée. Chaque rattachement ajoute
+aussi le nom de base du chemin à l'ensemble des noms. Par exemple, le même SHA peut avoir les
+noms `impot_2022.pdf` et `Jean_dupont_impot.pdf`, indépendamment des chemins
+`/Downloads/impot_2022.pdf` et `/Documents/Jean_dupont_impot.pdf`.
+
+Si un chemin déjà rattaché désigne de nouveaux octets, `file add` échoue avec `path_conflict` :
+il faut d'abord exécuter `file detach`, puis ajouter le nouveau contenu. La base ne suit ni inode
+ni lien symbolique.
 
 ### 2.2 Chemins
 
@@ -41,13 +47,17 @@ les commandes de consultation ni par `file detach`.
 `file detach` retire seulement la référence de la base. `file remove` retire seulement l'entrée
 de la base. Aucune des deux commandes ne modifie le système de fichiers.
 
+Les noms ne sont pas dérivés dynamiquement des chemins : le nom de base est copié dans
+l'ensemble des noms au moment de `file add` ou `file attach`. Détacher ensuite ce chemin ne
+supprime aucun nom. Inversement, supprimer un nom ne détache aucun chemin, même si celui-ci se
+termine par ce nom.
+
 ### 2.3 Texte
 
 Le texte est une chaîne UTF-8 opaque. `tripapiers` ne connaît ni sa langue, ni sa provenance, ni
-sa qualité. En l'absence de texte, aucune règle ne correspond, mais des tags explicites restent
-possibles.
+sa qualité. En l'absence de texte, aucune règle ne correspond et le fichier ne reçoit aucun tag.
 
-Une mise à jour de texte recalcule atomiquement les tags dérivés du fichier dans **toutes** les
+Une mise à jour de texte recalcule atomiquement les tags du fichier dans **toutes** les
 classifications, car le texte est partagé entre elles.
 
 ## 3. Classifications
@@ -56,20 +66,19 @@ Une classification nommée est un instantané cohérent qui contient :
 
 - son catalogue de tags ;
 - la liste ordonnée des regex de chaque tag ;
-- les affectations explicites ;
-- les affectations dérivées, recalculables à partir des textes et des regex ;
+- les affectations, entièrement recalculables à partir des textes et des regex ;
 - un numéro de révision croissant.
 
 Les fichiers, chemins et textes sont communs à toutes les classifications. Une base neuve crée
 la classification `default` et la sélectionne.
 
-Les commandes `tag …` et `file tag …` agissent sur la classification sélectionnée par
-`class select`. L'option globale `--class <name>` remplace cette sélection pour une invocation et
-évite un état implicite dans les automatisations.
+Les commandes `tag …` agissent sur la classification sélectionnée par `class select`. L'option
+globale `--class <name>` remplace cette sélection pour une invocation et évite un état implicite
+dans les automatisations.
 
-Le résultat effectif d'un fichier est l'union de ses tags explicites et dérivés. Une provenance
-conservée pour chaque affectation permet de distinguer les deux sources et d'indiquer les règles
-responsables.
+Un fichier reçoit un tag si au moins une regex de ce tag correspond à son texte. La provenance
+conservée pour chaque affectation indique les règles responsables. Toutes les affectations
+résultent des règles.
 
 ## 4. Règles mécaniques
 
@@ -103,7 +112,7 @@ concerné sur tous les textes de la classification dans une transaction unique. 
 le nombre de fichiers gagnant ou perdant le tag et la liste correspondante. `--dry-run` calcule
 le même résultat sans l'enregistrer.
 
-`class rebuild` recompile toutes les règles et reconstruit tous les tags dérivés. Il sert après
+`class rebuild` recompile toutes les règles et reconstruit tous les tags. Il sert après
 une migration ou à contrôler l'intégrité ; une modification normale n'en a pas besoin.
 
 ## 5. Interface des fichiers
@@ -130,39 +139,57 @@ tripapiers file remove --sha <sha> [--yes]
 ```
 
 `file add` lit le fichier, calcule son empreinte et sa taille, crée l'entrée si nécessaire,
-puis rattache le chemin. Son nom de base initialise `name` seulement lors de la création.
-Répéter l'opération sur le même couple contenu-chemin est idempotent.
+puis rattache le chemin et ajoute son nom de base à l'ensemble des noms. Répéter l'opération sur
+le même couple contenu-chemin est idempotent et garantit que ce nom est présent.
 
 `file attach` rattache à une entrée existante un autre chemin dont le contenu doit avoir le SHA
-annoncé. `file detach` retire un chemin même si le fichier externe n'existe plus. La dernière
-référence peut être retirée sans supprimer l'entrée.
+annoncé ; elle ajoute également son nom de base. `file detach` retire un chemin même si le
+fichier externe n'existe plus, sans toucher aux noms. La dernière référence peut être retirée
+sans supprimer l'entrée.
 
 `file remove` exige le SHA pour empêcher la suppression accidentelle par un ancien chemin. Elle
-supprime l'entrée, son texte et ses affectations dans toutes les classifications, mais aucun
-fichier externe. Une confirmation interactive est requise, sauf avec `--yes`.
+supprime l'entrée, ses noms, ses références de chemins, son texte et ses affectations dans toutes
+les classifications, mais aucun fichier externe. Une confirmation interactive est requise, sauf
+avec `--yes`.
 
 ### 5.3 Consultation et mise à jour
 
 ```text
 tripapiers file info (<path> | --sha <sha>) [--format text|json]
 tripapiers file update (<path> | --sha <sha>)
-  [--name <name>] [--text <path>] [--clear-text]
+  (--text <path> | --clear-text)
 tripapiers file text (<path> | --sha <sha>) [--output <path>]
 tripapiers file paths (<path> | --sha <sha>)
 tripapiers file verify ((<path> | --sha <sha>) | --all)
 ```
 
 `file update --text` lit intégralement le fichier texte UTF-8 fourni. `--clear-text` est
-incompatible avec `--text`. Une invocation sans champ à modifier est rejetée. Modifier le nom
-ne modifie aucun chemin ; le SHA et la taille ne peuvent pas être modifiés.
+incompatible avec `--text`. Le SHA et la taille ne peuvent pas être modifiés.
 
-`file info` affiche l'identité, tous les chemins, la présence et l'empreinte du texte, puis les
-tags effectifs avec leur provenance dans la classification choisie. Il n'affiche pas le texte.
-`file text` écrit le texte sur stdout ou dans `--output`. `file paths` liste les références,
-y compris celles qui n'existent plus. `file verify` relit les chemins présents sur disque et
+`file info` affiche l'identité, tous les noms et chemins, la présence et l'empreinte du texte,
+puis les tags avec leur provenance dans la classification choisie. Il n'affiche pas le texte.
+`file text` écrit le texte sur stdout ou dans `--output`. `file paths` liste les références, y
+compris celles qui n'existent plus. `file verify` relit les chemins présents sur disque et
 compare taille et SHA sans modifier la base ; `--all` contrôle toutes les entrées.
 
-### 5.4 Recherche
+### 5.4 Noms
+
+```text
+tripapiers file name add (<path> | --sha <sha>) <name>
+tripapiers file name remove (<path> | --sha <sha>) <name>
+tripapiers file name list (<path> | --sha <sha>)
+```
+
+`file name add` ajoute un alias sans créer de chemin. `file name remove` retire uniquement ce
+nom, même si un chemin enregistré possède le même nom de base. Retirer le dernier nom est
+autorisé ; le fichier reste adressable par SHA ou par l'un de ses chemins. Les noms sont uniques
+au sein d'un fichier, mais deux SHA différents peuvent partager le même nom.
+
+Un nom est une chaîne UTF-8 non vide représentant un nom de base : `/`, les séparateurs de la
+plateforme, `.` et `..` sont refusés, ainsi que les caractères de contrôle. `file name list`
+utilise l'ordre lexicographique.
+
+### 5.5 Recherche
 
 ```text
 tripapiers file list
@@ -171,24 +198,13 @@ tripapiers file list
   [--format text|json]
 ```
 
-Les globs et regex sont appliqués au nom d'affichage et aux chemins enregistrés. Plusieurs
-filtres du même type sont reliés par OU ; des types différents sont reliés par ET. Plusieurs
-`--tag` exigent tous les tags dans la classification sélectionnée. `--without-path` vise les
-entrées sans référence et `--missing` celles dont aucun chemin n'existe actuellement.
+Les globs et regex sont appliqués aux noms et chemins enregistrés ; une entrée correspond si au
+moins une de ces valeurs satisfait le filtre. Plusieurs filtres du même type sont reliés par OU ;
+des types différents sont reliés par ET. Plusieurs `--tag` exigent tous les tags dans la
+classification sélectionnée. `--without-path` vise les entrées sans référence et `--missing`
+celles dont aucun chemin n'existe actuellement.
 
-L'ordre de sortie est déterministe : `(name, sha256)`, puis chemins lexicographiques.
-
-### 5.5 Tags explicites
-
-```text
-tripapiers file tag add (<path> | --sha <sha>) <tag>
-tripapiers file tag remove (<path> | --sha <sha>) <tag>
-tripapiers file tag list (<path> | --sha <sha>) [--source explicit|regexp|all]
-```
-
-Ces commandes permettent à un outil externe de conserver sa décision sans inventer une regex.
-Le tag doit exister dans la classification. Retirer un tag explicite ne retire pas le même tag
-s'il reste produit par une règle.
+L'ordre de sortie est déterministe : SHA-256, puis noms et chemins lexicographiques.
 
 ## 6. Interface des tags
 
@@ -206,9 +222,9 @@ Un tag est une chaîne UTF-8 non vide, sans caractère de contrôle. `:` peut ex
 hiérarchie conventionnelle (`cat:medecine:ordonnance`), mais la base traite le tag comme une
 chaîne opaque.
 
-`tag remove` refuse un tag encore utilisé, sauf avec `--yes`; dans ce cas, il supprime ses
-règles et toutes ses affectations dans la classification courante. Les filtres de `tag list`
-s'appliquent uniquement aux noms de tags, jamais au texte de leurs regex.
+`tag remove` refuse un tag possédant encore des règles, sauf avec `--yes`; dans ce cas, il
+supprime ses règles et toutes leurs affectations dans la classification courante. Les filtres de
+`tag list` s'appliquent uniquement aux noms de tags, jamais au texte de leurs regex.
 
 `tag regexp test` compile et évalue une règle temporaire sur tous les textes, sans exiger que le
 tag existe et sans mutation. Il affiche les fichiers correspondants ; c'est la forme détaillée
@@ -229,8 +245,8 @@ tripapiers class compare <name> [--format text|json]
 ```
 
 - `new` crée une classification vide ;
-- `copy` copie la classification courante, y compris catalogue, règles et affectations
-  explicites, puis reconstruit ses affectations dérivées ;
+- `copy` copie le catalogue et les règles de la classification courante, puis reconstruit toutes
+  ses affectations ;
 - `rename` renomme la classification courante ;
 - `delete` vise le nom donné ou, à défaut, la classification courante ; elle refuse de supprimer
   la dernière classification et demande confirmation ;
@@ -238,28 +254,28 @@ tripapiers class compare <name> [--format text|json]
 
 La classification courante est le résultat et le nom donné est la référence : « ajouté » veut
 donc dire « présent dans la courante seulement ». La comparaison distingue les tags ajoutés ou
-supprimés du catalogue, les règles ajoutées, supprimées ou déplacées, et les tags effectifs
-ajoutés ou supprimés pour chaque SHA. Le format texte résume d'abord les nombres puis détaille
-les fichiers ; le JSON stable est destiné aux outils externes.
+supprimés du catalogue, les règles ajoutées, supprimées ou déplacées, et les tags ajoutés ou
+supprimés pour chaque SHA. Le format texte résume d'abord les nombres puis détaille les fichiers ;
+le JSON stable est destiné aux outils externes.
 
 ## 8. SQLite et configuration
 
 ### 8.1 Schéma logique minimal
 
 ```text
-files(sha256 PK, name, size, created_at, updated_at)
+files(sha256 PK, size, created_at, updated_at)
+names(sha256 FK, name, added_at)
 paths(path PK, sha256 FK, added_at, last_seen_at)
 texts(sha256 PK/FK, text, text_sha256, updated_at)
 classifications(id PK, name UNIQUE, revision, created_at, updated_at)
 tags(classification_id, tag, created_at)
 regexps(classification_id, tag, position, expression, created_at)
-explicit_assignments(classification_id, sha256, tag, created_at)
-derived_assignments(classification_id, sha256, tag, regexp_position,
-                    match_start, match_end)
+assignments(classification_id, sha256, tag, regexp_position, match_start, match_end)
 ```
 
-Les clés étrangères interdisent toute règle ou affectation vers un tag ou un fichier absent.
-Une vue `effective_assignments` expose l'union sans doublon des deux formes d'affectation.
+La clé primaire de `names` est `(sha256, name)` : un nom est unique pour un contenu, mais pas
+globalement. Les clés étrangères interdisent toute règle ou affectation vers un tag ou un
+fichier absent.
 
 ### 8.2 Configuration
 
@@ -298,7 +314,7 @@ tripapiers db vacuum
 ```
 
 `db verify` contrôle les contraintes, les empreintes des textes, les positions de regex et la
-reproductibilité des affectations dérivées, sans relire les fichiers externes. `db backup`
+reproductibilité des affectations, sans relire les fichiers externes. `db backup`
 emploie l'API de sauvegarde SQLite afin de produire un instantané cohérent.
 
 ## 10. Codes de sortie

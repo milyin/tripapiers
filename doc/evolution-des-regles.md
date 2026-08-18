@@ -25,9 +25,9 @@ tripapiers class copy candidate
 tripapiers class select candidate
 ```
 
-`class copy` copie les tags, leurs regex et les affectations explicites, puis reproduit les
-affectations dérivées sur les textes courants. La nouvelle classification est indépendante :
-ses règles peuvent évoluer sans modifier `accepted`.
+`class copy` copie les tags et leurs regex, puis reproduit les affectations sur les textes
+courants. La nouvelle classification est indépendante : ses règles peuvent évoluer sans
+modifier `accepted`.
 
 Dans un script concurrent, chaque commande doit utiliser `--class candidate` au lieu de dépendre
 de `class select`.
@@ -42,14 +42,8 @@ tripapiers file update ./documents/facture.pdf --text ./travail/facture.txt
 ```
 
 Le second appel remplace le texte partagé et recalcule ce fichier dans toutes les
-classifications. L'outil externe peut ensuite enregistrer une décision explicite :
-
-```console
-tripapiers --class candidate file tag add ./documents/facture.pdf cat:finance:facture
-```
-
-Une affectation explicite convient à une décision ponctuelle. Une regex convient à une règle
-générale et reproductible.
+classifications. Tous ses tags proviennent alors des regex de chaque classification : toute
+décision doit devenir une règle reproductible pour entrer dans la classification.
 
 ## 4. Proposer et éprouver une règle
 
@@ -73,7 +67,7 @@ La boucle minimale est :
    tripapiers --class candidate tag regexp add cuisine:recette '/pomme/i'
    ```
 
-   Cette transaction applique la règle à tous les textes, met à jour les affectations dérivées
+   Cette transaction applique la règle à tous les textes, met à jour les affectations
    et incrémente la révision de `candidate`.
 
 4. Mesurer toutes les conséquences par rapport à la référence :
@@ -83,7 +77,7 @@ La boucle minimale est :
    ```
 
 5. Examiner les documents dont les tags ont changé. Si un changement est incorrect, retirer la
-règle par sa position ou sa valeur exacte, puis en proposer une plus précise :
+   règle par sa position ou sa valeur exacte, puis en proposer une plus précise :
 
    ```console
    tripapiers --class candidate tag regexp remove cuisine:recette '/pomme/i'
@@ -109,13 +103,13 @@ files_removed: 0
 unchanged: 431
 ```
 
-Le détail identifie les fichiers par SHA, nom et chemins connus. Il indique la regex et la
+Le détail identifie les fichiers par SHA, noms et chemins connus. Il indique la regex et la
 plage de correspondance, mais pas le texte complet. L'outil externe utilise `file text` pour
 lire explicitement un document lorsqu'il en a besoin.
 
 `class compare` ne se limite pas à la dernière commande : il compare l'état complet des deux
 classifications et révèle aussi les effets cumulés, les suppressions de tags et les changements
-d'affectations explicites.
+d'affectations.
 
 ## 6. Stabiliser la variante
 
@@ -159,8 +153,7 @@ classification candidate peut être supprimée et recréée depuis la référenc
 
 1. Une règle ciblée ajoute le tag attendu à un document sans modifier les autres.
 2. Une règle trop large expose tous ses faux positifs dans le delta et dans `class compare`.
-3. Retirer une règle supprime seulement les affectations dérivées qui n'ont plus d'autre preuve.
-4. Un tag explicite survit au retrait d'une regex produisant le même tag.
-5. Une mise à jour de texte recalcule le fichier dans toutes les classifications.
-6. Deux recalculs du même état produisent exactement les mêmes affectations et preuves.
-7. Un conflit de révision ne laisse aucune règle ni affectation partiellement écrite.
+3. Retirer une règle supprime seulement les affectations qui n'ont plus d'autre preuve.
+4. Une mise à jour de texte recalcule le fichier dans toutes les classifications.
+5. Deux recalculs du même état produisent exactement les mêmes affectations et preuves.
+6. Un conflit de révision ne laisse aucune règle ni affectation partiellement écrite.
