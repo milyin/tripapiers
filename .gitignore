@@ -9,10 +9,13 @@
 .env
 .env.*
 
-# Artefacts de dépôt documentaire, jamais versionnés
+# Artefacts de dépôt documentaire, jamais versionnés.
+# QUARANTAINE/ contient des documents personnels en clair ainsi que leurs
+# transcriptions OCR : son exclusion est aussi importante que celle de DATE/.
 INBOX/
 DATE/
 STRUCTURE/
+QUARANTAINE/
 .TRASH/
 .STRUCTURE.staging/
 
